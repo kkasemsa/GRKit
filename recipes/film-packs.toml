@@ -1,0 +1,72 @@
+# Selected film packs: a starting recipe for each stock.
+#
+# A recipe names its Film Look by effect ID (the directory name in effects/),
+# never by its place in CORE.TONE, which can change at each start. A module
+# finds the value with effect_find (docs/module-reference.md).
+#
+# Every value here is a starting guess until a test shoot on the GR IV and the
+# GR IIIx confirms it. `status` says how far each pack has got:
+#   untested      a guess, not yet shot
+#   tested        shot on both cameras, values confirmed
+#   needs-effect  no effect in effects/ yet
+#
+# grain:          off, weak, medium, strong, extra-strong   (CORE.GRAIN)
+# grain_size:     auto, small, medium, large                 (CORE.GRAIN_SIZE)
+# aspect:         native, xpan, 16:9, 4:3, 2.35:1, 1:1, 5:4, 7:6, or absent
+#                 to leave the aspect as it is              (CORE.ASPECT)
+# white_balance:  a suggestion that the photographer sets by hand. Recipes do
+#                 not set white balance yet.
+
+[[pack]]
+id = "portra-400"
+name = "Portra 400"
+effect = "portra-400-endura-v1"
+grain = "weak"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "ektar-100"
+name = "Ektar 100"
+effect = "ektar-100-edge-v1"
+grain = "weak"
+grain_size = "small"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "hp5-400"
+name = "HP5 Plus 400"
+effect = "hp5-plus-400-mono-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "auto"
+status = "untested"
+
+[[pack]]
+id = "trix-400"
+name = "Tri-X 400"
+effect = "trix-400-mono-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "auto"
+status = "untested"
+
+[[pack]]
+id = "c200"
+name = "Fuji C200"
+effect = ""
+grain = "weak"
+grain_size = "auto"
+white_balance = "daylight"
+status = "needs-effect"
+
+[[pack]]
+id = "colorplus-200"
+name = "ColorPlus 200"
+effect = ""
+grain = "weak"
+grain_size = "auto"
+white_balance = "daylight"
+status = "needs-effect"
