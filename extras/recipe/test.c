@@ -13,6 +13,8 @@ u32 recipe_state(u32 index);
 #define EKTAR 2U
 #define HP5 3U
 #define TRIX 4U
+#define C200 5U
+#define ULTRAMAX 6U
 
 static void choose(u32 pick)
 {
@@ -43,7 +45,7 @@ int main(void)
        event subscriber, and a layer; Off and a tile for each recipe. */
     assert(grkit_module.setting_count == 3 && grkit_module.use_count == 4);
     assert(grkit_module.registration_count == 3);
-    assert(grkit_module.settings[0].values == TRIX + 1);
+    assert(grkit_module.settings[0].values == ULTRAMAX + 1);
     assert(grkit_module.tile_count == grkit_module.settings[0].values);
 
     /* The installed effects, in an order other than that of the recipes:
@@ -53,6 +55,8 @@ int main(void)
     grkit_test_effects[1] = "hp5-plus-400-mono-v1";
     grkit_test_effects[2] = "portra-400-endura-v1";
     grkit_test_effects[3] = "ektar-100-edge-v1";
+    grkit_test_effects[4] = "ultramax-400-premier-v1";
+    grkit_test_effects[5] = "c200-crystal-v1";
 
     /* Choosing a recipe sets its Film Look, grain, and grain size. */
     reset_settings();
@@ -66,6 +70,12 @@ int main(void)
     choose(HP5);
     assert(grkit_test_settings[USED_CORE_TONE] == 2);
     assert(grkit_test_settings[USED_CORE_GRAIN] == 3 && grkit_test_settings[USED_CORE_GRAIN_SIZE] == 0);
+    /* The new packs: Fuji C200 and UltraMax 400, also by ID. */
+    choose(C200);
+    assert(grkit_test_settings[USED_CORE_TONE] == 6 && grkit_test_settings[USED_CORE_GRAIN] == 2);
+    choose(ULTRAMAX);
+    assert(grkit_test_settings[USED_CORE_TONE] == 5 && grkit_test_settings[USED_CORE_GRAIN] == 2);
+    choose(HP5);
     /* No recipe sets an aspect, so the aspect stays. */
     assert(grkit_test_settings[USED_CORE_ASPECT] == 0);
 
@@ -133,7 +143,7 @@ int main(void)
     recipe_badge(&s, 0);
     assert(!drawn_from(0));
     /* Each label fits the surface. */
-    for (u32 pick = 1; pick <= TRIX; ++pick) {
+    for (u32 pick = 1; pick <= ULTRAMAX; ++pick) {
         grkit_test_clear();
         recipe_badge(&s, pick);
     }

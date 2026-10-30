@@ -1,5 +1,5 @@
 title = "レシピ"
-rows = ["オフ", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400"]
+rows = ["オフ", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400", "Fuji C200", "UltraMax 400"]
 
 [settings.PICK]
 label = "レシピ"

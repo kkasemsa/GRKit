@@ -23,6 +23,9 @@
 #   untested          a starting guess, not yet shot
 #   needs-effect      no effect in effects/ yet
 #
+# UltraMax 400 takes the place of ColorPlus 200, whose only open-source
+# LUT (t3mujinpack) fits the effect model at grade C.
+#
 # grain:          off, weak, medium, strong, extra-strong   (CORE.GRAIN)
 # grain_size:     auto, small, medium, large                 (CORE.GRAIN_SIZE)
 # aspect:         native, xpan, 16:9, 4:3, 2.35:1, 1:1, 5:4, 7:6, or absent
@@ -74,17 +77,17 @@ status = "untested"
 [[pack]]
 id = "c200"
 name = "Fuji C200"
-effect = ""
+effect = "c200-crystal-v1"
 grain = "strong"
 grain_size = "auto"
 white_balance = "daylight"
-status = "needs-effect"
+status = "untested"
 
 [[pack]]
-id = "colorplus-200"
-name = "ColorPlus 200"
-effect = ""
+id = "ultramax-400"
+name = "UltraMax 400"
+effect = "ultramax-400-premier-v1"
 grain = "strong"
 grain_size = "auto"
 white_balance = "daylight"
-status = "needs-effect"
+status = "untested"

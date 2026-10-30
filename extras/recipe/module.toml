@@ -14,13 +14,15 @@ tiles = [
     "tiles/2-ektar-100.png",
     "tiles/3-hp5-400.png",
     "tiles/4-trix-400.png",
+    "tiles/5-c200.png",
+    "tiles/6-ultramax-400.png",
 ]
 uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT"]
 
 # 0 Off, then recipe n - 1 of recipes.h.
 [[settings]]
 key = "PICK"
-values = 5
+values = 7
 saved = true
 public = true
 

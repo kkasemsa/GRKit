@@ -8,7 +8,8 @@ parameters, not the LUTs.
 ## spektrafilm
 
 Portra 400, Gold 200, Ektar 100, Pro 400H, Superia 400, Vision3 250D, Vision3 500T,
-Portra 800 +2, Kodachrome 64, Velvia 100, and Ektachrome E100 derive from LUTs of
+Portra 800 +2, Kodachrome 64, Velvia 100, Ektachrome E100, Fujicolor C200, and UltraMax 400
+derive from LUTs of
 [spektrafilm](https://github.com/andreavolpato/spektrafilm) 0.3.4 by Andrea Volpato,
 licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 These effect definitions are also licensed under CC BY-SA 4.0.

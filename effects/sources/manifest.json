@@ -49,7 +49,7 @@
       "license": "upstream-changes"
     },
     "bake_spektrafilm.py": {
-      "sha256": "3f3fd813e11895260ee4dea674e1e2958be408a46a0ef3fbc19319b586ae0ec5",
+      "sha256": "371b918e96b9128f7f1e1879f31c32a742e295844fb2d5af8d7ac8969bc67794",
       "license": "project"
     },
     "bake_spectral_film_lut.py": {
@@ -61,6 +61,10 @@
     "aerocolor-iv-v1.cube": {
       "generator": "spectral_film_lut",
       "sha256": "7079fd3703de7046543b5fb75d74f241092b2d5596cbb74e70e84cc56d442978"
+    },
+    "c200-crystal-v1.cube": {
+      "generator": "spektrafilm",
+      "sha256": "d8568a0e93b38c54691e6ff35682f4a591660d7e40513376112fe1be867c6d03"
     },
     "double-x-5222-mono-v1.cube": {
       "generator": "spectral_film_lut",
@@ -114,6 +118,10 @@
     "trix-400-mono-v1.cube": {
       "generator": "spectral_film_lut",
       "sha256": "b618b9c36de455fa86c31018bde5763e2f17726db5bcf9140a2c6bb410d56910"
+    },
+    "ultramax-400-premier-v1.cube": {
+      "generator": "spektrafilm",
+      "sha256": "011dce208e752f0cf4a70934412ceb903b230fbb8397b5809db8140c49259c50"
     },
     "velvia-100-v1.cube": {
       "generator": "spektrafilm",

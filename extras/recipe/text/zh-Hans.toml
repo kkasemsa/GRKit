@@ -1,5 +1,5 @@
 title = "配方"
-rows = ["关闭", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400"]
+rows = ["关闭", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400", "Fuji C200", "UltraMax 400"]
 
 [settings.PICK]
 label = "配方"
