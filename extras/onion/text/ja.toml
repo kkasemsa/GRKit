@@ -1,21 +1,9 @@
 title = "オニオンスキン"
-rows = ["オフ", "直前のショット", "参照を固定", "ポーズガイド"]
+rows = ["オフ", "直前のショット", "参照を固定"]
 
 [settings.MODE]
 label = "表示モード"
 
-[settings.POSE]
-label = "ポーズ"
-values = ["振り返り", "よそ見", "こちらへ歩く", "3人で"]
-
 [settings.STYLE]
 label = "表示スタイル"
 values = ["薄く", "濃く", "輪郭"]
-
-[settings.MIRROR]
-label = "ポーズを反転"
-values = ["オフ", "オン"]
-
-[settings.SIZE]
-label = "ポーズの大きさ"
-values = ["大", "中", "小"]

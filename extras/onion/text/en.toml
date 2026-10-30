@@ -1,21 +1,9 @@
 title = "Onion Skin"
-rows = ["Off", "Last Shot", "Hold Reference", "Pose Guide"]
+rows = ["Off", "Last Shot", "Hold Reference"]
 
 [settings.MODE]
 label = "Onion Skin Mode"
 
-[settings.POSE]
-label = "Pose"
-values = ["Over the Shoulder", "Looking Away", "Walking Toward Camera", "Group of Three"]
-
 [settings.STYLE]
 label = "Ghost Style"
 values = ["Faint", "Strong", "Edges"]
-
-[settings.MIRROR]
-label = "Mirror Pose"
-values = ["Off", "On"]
-
-[settings.SIZE]
-label = "Pose Size"
-values = ["Large", "Medium", "Small"]

@@ -1,6 +1,5 @@
 # Onion Skin: a faint picture over the live view to line up a shot: the last
-# shot, a held reference, or one of 4 built-in pose silhouettes (poses.h, drawn by
-# poses.py).
+# shot or a held reference.
 id = "ONION"
 version = 1
 # The default place in ADJ and in MENU: after Roll (6).
@@ -11,22 +10,14 @@ tiles = [
     "tiles/0-module.png",
     "tiles/1-last.png",
     "tiles/2-hold.png",
-    "tiles/3-pose.png",
 ]
 
-# 0 Off, 1 Last Shot, 2 Hold Reference, 3 Pose Guide.
+# 0 Off, 1 Last Shot, 2 Hold Reference.
 [[settings]]
 key = "MODE"
-values = 4
+values = 3
 saved = true
 public = true
-
-# The pose of Pose Guide, in the order of poses.h: over the shoulder,
-# looking away, walking toward the camera, group of three.
-[[settings]]
-key = "POSE"
-values = 4
-saved = true
 
 # 0 Faint, 1 Strong, 2 Edges.
 [[settings]]
@@ -34,22 +25,10 @@ key = "STYLE"
 values = 3
 saved = true
 
-# The pose mirrored left to right: 0 Off, 1 On.
-[[settings]]
-key = "MIRROR"
-values = 2
-saved = true
-
-# The pose height: 0 Large (90% of the photo area), 1 Medium (70%), 2 Small (50%).
-[[settings]]
-key = "SIZE"
-values = 3
-saved = true
-
 [page]
 setting = "MODE"
 off_row = true
-settings = ["MODE", "POSE", "STYLE", "MIRROR", "SIZE"]
+settings = ["MODE", "STYLE"]
 
 [events]
 handle = "onion_event"

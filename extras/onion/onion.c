@@ -5,17 +5,14 @@
    Hold Reference the first picture after choosing it, held until the mode
                  changes: photograph a reference pose, such as a picture on a
                  phone, and pose your subject against it.
-   Pose Guide    a built-in pose silhouette (poses.h), to direct a portrait.
 
-   A module cannot read the live view or write files, so the guide cannot
-   check the subject, and a held picture lasts until the camera turns off. */
+   A module cannot write files, so a held picture lasts until the camera
+   turns off. */
 #include "grkit.h"
 #include "grkit_module.h"
-#include "poses.h"
 
 #define MODE_LAST 1U
 #define MODE_HOLD 2U
-#define MODE_POSE 3U
 
 /* The held picture: the luma of the smallest picture of a shot (the
    thumbnail), reduced to GHOST_W x GHOST_H, and its edges. */
@@ -81,7 +78,6 @@ void onion_event(u32 event, u32 handle, u32 value)
 #define WHITE 0x00ffffffU
 static u32 alpha(u32 style) { return style == STYLE_STRONG ? 0x90U : 0x50U; }
 #define EDGE_ALPHA 0xe0U
-#define HALO 0x90000000U
 
 /* The held picture, scaled to the photo area. */
 static void paint_ghost(const Surface *s, u32 style)
@@ -104,61 +100,9 @@ static void paint_ghost(const Surface *s, u32 style)
     }
 }
 
-static u32 pose_bit(const u8 *mask, int x, int y)
-{
-    if (x < 0 || y < 0 || x >= (int)POSE_W || y >= (int)POSE_H) return 0;
-    return mask[y * POSE_ROW + (x >> 3)] >> (7 - (x & 7)) & 1;
-}
-
-/* The pose silhouette: SIZE 0, 1, 2 for 90%, 70%, 50% of the height of the
-   photo area, centred, standing on its bottom edge. Edges draws its outline. */
-void onion_pose(const Surface *s, u32 pose, u32 style, u32 mirror, u32 size)
-{
-    u32 l = s->box[0], t = s->box[1], r = s->box[2], b = s->box[3];
-    u32 fh, fw, x0, y0, x, y, sx, sy, step;
-    const u8 *mask;
-    if (pose >= POSE_COUNT || r <= l || b <= t) return;
-    mask = poses[pose];
-    fh = (b - t) * (size == 2 ? 50U : size == 1 ? 70U : 90U) / 100U;
-    fw = fh * POSE_W / POSE_H;
-    if (fh < 8 || fw >= r - l) return;
-    x0 = l + ((r - l) - fw) / 2;
-    y0 = b - fh;
-    step = divide(POSE_H << 16, fh);
-    for (y = y0, sy = 0; y < b && y < 480; ++y, sy += step) {
-        int my = (int)(sy >> 16);
-        for (x = x0, sx = 0; x < x0 + fw && x < 720; ++x, sx += step) {
-            int mx = (int)(sx >> 16);
-            if (mirror) mx = (int)POSE_W - 1 - mx;
-            if (!pose_bit(mask, mx, my)) {
-                /* A dark halo just outside the outline keeps it visible on
-                   a bright background. */
-                if (style == STYLE_EDGES &&
-                    (pose_bit(mask, mx - 1, my) || pose_bit(mask, mx + 1, my) ||
-                     pose_bit(mask, mx, my - 1) || pose_bit(mask, mx, my + 1)))
-                    SURFACE_PIXEL(s, x, y) = HALO;
-                continue;
-            }
-            if (style == STYLE_EDGES) {
-                if (pose_bit(mask, mx - 1, my) && pose_bit(mask, mx + 1, my) &&
-                    pose_bit(mask, mx, my - 1) && pose_bit(mask, mx, my + 1))
-                    continue;
-                SURFACE_PIXEL(s, x, y) = EDGE_ALPHA << 24 | WHITE;
-            } else {
-                SURFACE_PIXEL(s, x, y) = alpha(style) << 24 | WHITE;
-            }
-        }
-    }
-}
-
 /* The layer: the held picture for Last Shot and Hold Reference, once there is
-   one, or the chosen pose. */
+   one. */
 void onion_paint(const Surface *s, u32 mode)
 {
-    u32 style = setting_get(SETTING_STYLE);
-    if (mode == MODE_POSE) {
-        onion_pose(s, setting_get(SETTING_POSE), style, setting_get(SETTING_MIRROR), setting_get(SETTING_SIZE));
-        return;
-    }
-    if ((mode == MODE_LAST || mode == MODE_HOLD) && have_ghost) paint_ghost(s, style);
+    if ((mode == MODE_LAST || mode == MODE_HOLD) && have_ghost) paint_ghost(s, setting_get(SETTING_STYLE));
 }

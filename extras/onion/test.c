@@ -1,5 +1,5 @@
 /* The host test of Onion Skin (grkit module test): taking and holding the
-   picture, drawing it into the photo area, and the pose guide. */
+   picture, and drawing it into the photo area. */
 #include <assert.h>
 #include <string.h>
 #include "grkit_module.h"
@@ -7,11 +7,9 @@
 void onion_apply(PictureSet *set, u32 mode);
 void onion_event(u32 event, u32 handle, u32 value);
 void onion_paint(const Surface *s, u32 mode);
-void onion_pose(const Surface *s, u32 pose, u32 style, u32 mirror, u32 size);
 
 #define MODE_LAST 1U
 #define MODE_HOLD 2U
-#define MODE_POSE 3U
 
 /* A main picture of 600 x 400 and a thumbnail of 180 x 120 whose left half
    has luma `left` and right half luma `right`. */
@@ -45,10 +43,10 @@ int main(void)
     Surface s = grkit_test_surface(full);
     PictureSet set;
 
-    /* The descriptor: MODE, POSE, STYLE, MIRROR, SIZE; a page, an event
-       subscriber, a plane filter, and a layer. */
-    assert(grkit_module.setting_count == 5 && grkit_module.registration_count == 4);
-    assert(grkit_module.tile_count == 4);
+    /* The descriptor: MODE and STYLE; a page, an event subscriber, a plane
+       filter, and a layer. */
+    assert(grkit_module.setting_count == 2 && grkit_module.registration_count == 4);
+    assert(grkit_module.tile_count == 3);
 
     /* Before any shot, Last Shot draws nothing. */
     memset(grkit_test_settings, 0, sizeof(grkit_test_settings));
@@ -106,59 +104,6 @@ int main(void)
     grkit_test_clear();
     onion_paint(&s, MODE_HOLD);
     assert((grkit_test_pixel(10, 240) & 0xff) == 220);
-    /* Pose Guide takes no picture. */
-    set = shot(5, 5);
-    onion_apply(&set, MODE_POSE);
-    grkit_test_clear();
-    onion_paint(&s, MODE_HOLD);
-    assert((grkit_test_pixel(10, 240) & 0xff) == 220);
-
-    /* Pose Guide: every pose draws, centred, standing on the bottom edge. */
-    for (u32 pose = 0; pose < 4; ++pose) {
-        u32 fill, edge;
-        grkit_test_clear();
-        onion_pose(&s, pose, 0, 0, 0);
-        fill = lit();
-        assert(fill > 1000);
-        assert(grkit_test_pixel(0, 240) == GRKIT_TEST_CLEAR && grkit_test_pixel(719, 240) == GRKIT_TEST_CLEAR);
-        /* The top 10% stays clear at Large (90%). */
-        for (u32 x = 0; x < 720; ++x) assert(grkit_test_pixel(x, 20) == GRKIT_TEST_CLEAR);
-        /* Edges draws the outline: fewer pixels than the fill. */
-        grkit_test_clear();
-        onion_pose(&s, pose, 2, 0, 0);
-        edge = lit();
-        assert(edge > 0 && edge < fill);
-        /* Small draws less than Large. */
-        grkit_test_clear();
-        onion_pose(&s, pose, 0, 0, 2);
-        assert(lit() < fill);
-    }
-    /* Over the shoulder (0): its head is right of centre; mirrored, left of
-       centre. */
-    {
-        u32 left = 0, right = 0;
-        grkit_test_clear();
-        onion_pose(&s, 0, 0, 0, 0);
-        for (u32 y = 120; y < 160; ++y)
-            for (u32 x = 0; x < 720; ++x)
-                if (grkit_test_pixel(x, y) != GRKIT_TEST_CLEAR) { if (x < 360) ++left; else ++right; }
-        assert(right > left);
-        left = right = 0;
-        grkit_test_clear();
-        onion_pose(&s, 0, 0, 1, 0);
-        for (u32 y = 120; y < 160; ++y)
-            for (u32 x = 0; x < 720; ++x)
-                if (grkit_test_pixel(x, y) != GRKIT_TEST_CLEAR) { if (x < 360) ++left; else ++right; }
-        assert(left > right);
-    }
-    /* The layer draws the chosen pose; an unknown pose draws nothing. */
-    grkit_test_settings[SETTING_POSE] = 3;
-    grkit_test_clear();
-    onion_paint(&s, MODE_POSE);
-    assert(lit() > 1000);
-    grkit_test_clear();
-    onion_pose(&s, 4, 0, 0, 0);
-    assert(lit() == 0);
     /* Off draws nothing. */
     grkit_test_clear();
     onion_paint(&s, 0);

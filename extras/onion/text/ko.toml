@@ -1,21 +1,9 @@
 title = "어니언 스킨"
-rows = ["꺼짐", "직전 사진", "참조 고정", "포즈 가이드"]
+rows = ["꺼짐", "직전 사진", "참조 고정"]
 
 [settings.MODE]
 label = "표시 모드"
 
-[settings.POSE]
-label = "포즈"
-values = ["어깨 너머 보기", "시선 돌리기", "카메라로 걷기", "세 사람"]
-
 [settings.STYLE]
 label = "표시 스타일"
 values = ["옅게", "진하게", "윤곽선"]
-
-[settings.MIRROR]
-label = "포즈 반전"
-values = ["꺼짐", "켜짐"]
-
-[settings.SIZE]
-label = "포즈 크기"
-values = ["크게", "중간", "작게"]
