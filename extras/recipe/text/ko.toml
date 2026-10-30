@@ -1,5 +1,5 @@
-title = "레시피"
-rows = ["꺼짐", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400", "Fuji C200", "UltraMax 400"]
+title = "레시피 A"
+rows = ["꺼짐", "Portra 400", "Ektar 100", "Gold 200", "UltraMax 400", "Fuji C200"]
 
 [settings.PICK]
 label = "레시피"

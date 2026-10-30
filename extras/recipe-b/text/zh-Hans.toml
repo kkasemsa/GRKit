@@ -1,0 +1,13 @@
+title = "配方 B"
+rows = ["关闭", "HP5 Plus 400", "Tri-X 400", "Provia 100F", "Eterna 500T"]
+
+[settings.PICK]
+label = "配方"
+
+[settings.RESET]
+label = "重置配方"
+values = ["保持", "重置"]
+
+[settings.NAME]
+label = "配方名称"
+values = ["显示", "隐藏"]

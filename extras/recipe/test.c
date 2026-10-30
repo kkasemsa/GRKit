@@ -1,5 +1,6 @@
-/* The host test of Recipe (grkit module test): choosing, resetting, and the
-   viewfinder label, with the GR IV recipes of recipes.h. */
+/* The host test of Recipe A (grkit module test): choosing, resetting, the
+   other menu going to Off, and the viewfinder label, with the GR IV recipes
+   of recipes.h. */
 #include <assert.h>
 #include <string.h>
 #include "grkit_module.h"
@@ -11,10 +12,9 @@ u32 recipe_state(u32 index);
 /* The recipes, in the order of PICK (recipes-gr4.h). */
 #define PORTRA 1U
 #define EKTAR 2U
-#define HP5 3U
-#define TRIX 4U
+#define GOLD 3U
+#define ULTRAMAX 4U
 #define C200 5U
-#define ULTRAMAX 6U
 
 static void choose(u32 pick)
 {
@@ -41,15 +41,16 @@ int main(void)
     static const u16 full[4] = {0, 0, 720, 480};
     Surface s = grkit_test_surface(full);
 
-    /* The descriptor: PICK, RESET, and NAME; four used settings; a page, an
-       event subscriber, and a layer; Off and a tile for each recipe. */
-    assert(grkit_module.setting_count == 3 && grkit_module.use_count == 4);
+    /* The descriptor: PICK, RESET, and NAME; five used settings, the last
+       the PICK of Recipe B; a page, an event subscriber, and a layer; Off and
+       a tile for each recipe. */
+    assert(grkit_module.setting_count == 3 && grkit_module.use_count == 5);
     assert(grkit_module.registration_count == 3);
-    assert(grkit_module.settings[0].values == ULTRAMAX + 1);
+    assert(grkit_module.settings[0].values == C200 + 1);
     assert(grkit_module.tile_count == grkit_module.settings[0].values);
 
     /* The installed effects, in an order other than that of the recipes:
-       a recipe finds its effect by ID, not by its place. Tri-X 400 is not
+       a recipe finds its effect by ID, not by its place. Gold 200 is not
        installed. */
     grkit_test_effects[0] = "velvia-100-v1";
     grkit_test_effects[1] = "hp5-plus-400-mono-v1";
@@ -67,26 +68,29 @@ int main(void)
     choose(EKTAR);
     assert(grkit_test_settings[USED_CORE_TONE] == 4);
     assert(grkit_test_settings[USED_CORE_GRAIN] == 2 && grkit_test_settings[USED_CORE_GRAIN_SIZE] == 1);
-    choose(HP5);
-    assert(grkit_test_settings[USED_CORE_TONE] == 2);
-    assert(grkit_test_settings[USED_CORE_GRAIN] == 3 && grkit_test_settings[USED_CORE_GRAIN_SIZE] == 0);
-    /* The new packs: Fuji C200 and UltraMax 400, also by ID. */
     choose(C200);
     assert(grkit_test_settings[USED_CORE_TONE] == 6 && grkit_test_settings[USED_CORE_GRAIN] == 2);
     choose(ULTRAMAX);
     assert(grkit_test_settings[USED_CORE_TONE] == 5 && grkit_test_settings[USED_CORE_GRAIN] == 2);
-    choose(HP5);
+    choose(EKTAR);
     /* No recipe sets an aspect, so the aspect stays. */
     assert(grkit_test_settings[USED_CORE_ASPECT] == 0);
 
     /* A recipe whose Film Look is not installed changes nothing and says so. */
     {
         u32 calls = grkit_test_ui_calls;
-        choose(TRIX);
-        assert(grkit_test_settings[USED_CORE_TONE] == 2 && grkit_test_settings[USED_CORE_GRAIN] == 3);
+        grkit_test_settings[USED_RECIPEB_PICK] = 2;
+        choose(GOLD);
+        assert(grkit_test_settings[USED_CORE_TONE] == 4 && grkit_test_settings[USED_CORE_GRAIN_SIZE] == 1);
         assert(grkit_test_ui_calls == calls + 1);
-        assert(recipe_state(TRIX - 1) == 2);
+        assert(recipe_state(GOLD - 1) == 2);
+        /* ... and leaves Recipe B as it is. */
+        assert(grkit_test_settings[USED_RECIPEB_PICK] == 2);
     }
+
+    /* A recipe that applies sets Recipe B to Off. */
+    choose(PORTRA);
+    assert(grkit_test_settings[USED_RECIPEB_PICK] == 0);
 
     /* Off applies nothing. */
     choose(PORTRA);

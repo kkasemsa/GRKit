@@ -1,0 +1,13 @@
+title = "Recipe B"
+rows = ["Off", "HP5 Plus 400", "Tri-X 400", "Provia 100F", "Eterna 500T"]
+
+[settings.PICK]
+label = "Recipe"
+
+[settings.RESET]
+label = "Reset Recipe"
+values = ["Keep", "Reset"]
+
+[settings.NAME]
+label = "Recipe Name"
+values = ["Show", "Hide"]

@@ -1,5 +1,5 @@
-title = "Recipe"
-rows = ["Off", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400", "Fuji C200", "UltraMax 400"]
+title = "Recipe A"
+rows = ["Off", "Portra 400", "Ektar 100", "Gold 200", "UltraMax 400", "Fuji C200"]
 
 [settings.PICK]
 label = "Recipe"

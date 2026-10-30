@@ -1,0 +1,56 @@
+# Recipe B: the second menu of film recipes, the black-and-white, slide, and
+# cinema stocks, with the code of Recipe A (extras/recipe/recipe_impl.h).
+# Choosing a recipe in either menu sets the other to Off. The recipes are
+# data of the camera family: menu "b" of recipes/<family>.toml, generated
+# into recipes-<family>.h. recipes.h selects the family;
+# scripts/recipe-module.sh builds the module of a family.
+id = "RECIPEB"
+version = 1
+# The default place in ADJ and in MENU: after Recipe A (5).
+order = 6
+sources = ["recipe.c"]
+# Tile n shows recipe n. Tile 0 is the module tile, for Off at the root.
+tiles = [
+    "tiles/0-module.png",
+    "tiles/1-hp5-400.png",
+    "tiles/2-trix-400.png",
+    "tiles/3-provia-100f.png",
+    "tiles/4-eterna-500t.png",
+]
+uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT", "?RECIPE.PICK"]
+
+# 0 Off, then recipe n - 1 of recipes.h.
+[[settings]]
+key = "PICK"
+values = 5
+saved = true
+public = true
+
+# 0 Keep. 1 applies the chosen recipe again and returns to Keep.
+[[settings]]
+key = "RESET"
+values = 2
+
+# The viewfinder label: 0 Show, 1 Hide.
+[[settings]]
+key = "NAME"
+values = 2
+saved = true
+
+[page]
+setting = "PICK"
+off_row = true
+settings = ["PICK", "RESET", "NAME"]
+
+[events]
+handle = "recipe_event"
+on = ["setting_changed"]
+
+# The name of the recipe shows with the full display, below the first rows of
+# native text.
+[[layers]]
+paint = "recipe_badge"
+setting = "PICK"
+order = 45
+full_disp = true
+live_only = true

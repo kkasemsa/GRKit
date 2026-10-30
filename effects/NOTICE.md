@@ -8,7 +8,7 @@ parameters, not the LUTs.
 ## spektrafilm
 
 Portra 400, Gold 200, Ektar 100, Pro 400H, Superia 400, Vision3 250D, Vision3 500T,
-Portra 800 +2, Kodachrome 64, Velvia 100, Ektachrome E100, Fujicolor C200, and UltraMax 400
+Portra 800 +2, Kodachrome 64, Velvia 100, Provia 100F, Ektachrome E100, Fujicolor C200, and UltraMax 400
 derive from LUTs of
 [spektrafilm](https://github.com/andreavolpato/spektrafilm) 0.3.4 by Andrea Volpato,
 licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
@@ -20,7 +20,7 @@ levels of Vision3 500T, and fits each LUT to the effect model.
 
 ## Spectral Film LUT
 
-Tri-X 400, Tri-X 400 Red, Aerocolor IV, Eterna 500T, Instax, and Double-X 5222 derive from LUTs
+Tri-X 400, Tri-X 400 Red, Eterna 500T, Instax, and Double-X 5222 derive from LUTs
 of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse, licensed under
 the MIT License. `sources/SPECTRAL_FILM_LUT_LICENSE.txt` contains its copyright and permission
 notice. These effect definitions are also licensed under the MIT License. Tri-X 400 Red applies

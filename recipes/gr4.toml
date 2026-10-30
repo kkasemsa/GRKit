@@ -8,6 +8,11 @@
 # never by its place in CORE.TONE, which can change at each start. A module
 # finds the value with effect_find (docs/module-reference.md).
 #
+# Recipe has two menus of at most 7 recipes each, a menu field per pack:
+# "a" (colour negative, extras/recipe) and "b" (black-and-white, slide, and
+# cinema, extras/recipe-b). Choosing a recipe in one menu sets the other to
+# Off.
+#
 # Both files list the same packs, in the same order, with the same effect,
 # name, white balance, and aspect. Only grain differs: at the same setting,
 # the grain of the GR IIIx is weaker than that of the GR IV, so the GR IIIx
@@ -30,6 +35,7 @@
 # grain_size:     auto, small, medium, large                 (CORE.GRAIN_SIZE)
 # aspect:         native, xpan, 16:9, 4:3, 2.35:1, 1:1, 5:4, 7:6, or absent
 #                 to leave the aspect as it is              (CORE.ASPECT)
+# menu:           a or b
 # white_balance:  a suggestion that the photographer sets by hand, with the
 #                 white balance shift at 0 / 0. Recipes do not set white
 #                 balance yet.
@@ -41,6 +47,7 @@
 [[pack]]
 id = "portra-400"
 name = "Portra 400"
+menu = "a"
 effect = "portra-400-endura-v1"
 grain = "medium"
 grain_size = "auto"
@@ -50,6 +57,7 @@ status = "tested"
 [[pack]]
 id = "ektar-100"
 name = "Ektar 100"
+menu = "a"
 effect = "ektar-100-edge-v1"
 grain = "medium"
 grain_size = "small"
@@ -57,8 +65,39 @@ white_balance = "daylight"
 status = "tested"
 
 [[pack]]
+id = "gold-200"
+name = "Gold 200"
+menu = "a"
+effect = "gold-200-premier-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "ultramax-400"
+name = "UltraMax 400"
+menu = "a"
+effect = "ultramax-400-premier-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "c200"
+name = "Fuji C200"
+menu = "a"
+effect = "c200-crystal-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
 id = "hp5-400"
 name = "HP5 Plus 400"
+menu = "b"
 effect = "hp5-plus-400-mono-v1"
 grain = "strong"
 grain_size = "auto"
@@ -68,6 +107,7 @@ status = "tested"
 [[pack]]
 id = "trix-400"
 name = "Tri-X 400"
+menu = "b"
 effect = "trix-400-mono-v1"
 grain = "strong"
 grain_size = "auto"
@@ -75,18 +115,20 @@ white_balance = "daylight"
 status = "untested"
 
 [[pack]]
-id = "c200"
-name = "Fuji C200"
-effect = "c200-crystal-v1"
-grain = "medium"
-grain_size = "auto"
+id = "provia-100f"
+name = "Provia 100F"
+menu = "b"
+effect = "provia-100f-v1"
+grain = "weak"
+grain_size = "small"
 white_balance = "daylight"
 status = "untested"
 
 [[pack]]
-id = "ultramax-400"
-name = "UltraMax 400"
-effect = "ultramax-400-premier-v1"
+id = "eterna-500t"
+name = "Eterna 500T"
+menu = "b"
+effect = "eterna-500t-3523xd-v1"
 grain = "medium"
 grain_size = "auto"
 white_balance = "daylight"

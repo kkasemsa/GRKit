@@ -45,23 +45,19 @@
       "upstream": "https://github.com/t3mujin/t3mujinpack/blob/0b421f3e25209ed78253d1724a29cc6255c5e7fe/LICENSE.txt"
     },
     "CHANGELOG.txt": {
-      "sha256": "1cb1a385ab027f5ed0e9f579a355f8e5f08f8d4d3f21cad73e52846511f02262",
+      "sha256": "2a54db31e93dc231f96c8286c0fd6d6e3906c30018508bb5bbf9f6fa3ff99e55",
       "license": "upstream-changes"
     },
     "bake_spektrafilm.py": {
-      "sha256": "371b918e96b9128f7f1e1879f31c32a742e295844fb2d5af8d7ac8969bc67794",
+      "sha256": "3b0410210851f6098ada6af4aa2c3b279024a87b71c59a04e4e335e5048541ac",
       "license": "project"
     },
     "bake_spectral_film_lut.py": {
-      "sha256": "979a529bfdcf4d8681385a0ff2d698374d8003c9580a6d4d4a9b4123d104f69c",
+      "sha256": "f184f6cb98c43037916ca6a4a76706791ad33e76178e4664496db8f26e7c7b60",
       "license": "project"
     }
   },
   "luts": {
-    "aerocolor-iv-v1.cube": {
-      "generator": "spectral_film_lut",
-      "sha256": "7079fd3703de7046543b5fb75d74f241092b2d5596cbb74e70e84cc56d442978"
-    },
     "c200-crystal-v1.cube": {
       "generator": "spektrafilm",
       "sha256": "d8568a0e93b38c54691e6ff35682f4a591660d7e40513376112fe1be867c6d03"
@@ -110,6 +106,10 @@
     "pro-400h-crystal-v1.cube": {
       "generator": "spektrafilm",
       "sha256": "66361c619cbc20d8ff1622359947a72e229d3a2ef029b57f54084d9c691bf729"
+    },
+    "provia-100f-v1.cube": {
+      "generator": "spektrafilm",
+      "sha256": "e0fa266bdca080f40d1c01a37a6c3e81b791c0b33aaac53741a103bc4c9d1119"
     },
     "red-filter-mono-v1.cube": {
       "generator": "spectral_film_lut",

@@ -11,7 +11,12 @@ const ASPECTS: [&str; 8] = [
 ];
 const STATUSES: [&str; 4] = ["tested", "grain-unverified", "untested", "needs-effect"];
 /// The fields that must be equal in each family: the look itself.
-const SHARED: [&str; 5] = ["id", "name", "effect", "white_balance", "aspect"];
+const SHARED: [&str; 6] = ["id", "name", "menu", "effect", "white_balance", "aspect"];
+/// The Recipe menus: the menu field and the module folder of each. A menu
+/// has at most 7 recipes, as PICK, with Off, is a native settings row of at
+/// most 8 values.
+const MENUS: [(&str, &str); 2] = [("a", "extras/recipe"), ("b", "extras/recipe-b")];
+const MENU_RECIPES: usize = 7;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -48,6 +53,7 @@ fn each_pack_is_valid() {
         "grain",
         "grain_size",
         "aspect",
+        "menu",
         "white_balance",
         "status",
     ];
@@ -77,6 +83,11 @@ fn each_pack_is_valid() {
             if let Some(aspect) = text(pack, "aspect") {
                 assert!(ASPECTS.contains(&aspect), "{family} {id}: aspect {aspect}");
             }
+            let menu = text(pack, "menu").expect("menu");
+            assert!(
+                MENUS.iter().any(|(m, _)| *m == menu),
+                "{family} {id}: menu {menu}"
+            );
             let status = text(pack, "status").expect("status");
             assert!(STATUSES.contains(&status), "{family} {id}: status {status}");
             let effect = text(pack, "effect").expect("effect");
@@ -130,12 +141,27 @@ fn index(values: &[&str], value: &str) -> usize {
         .expect("a checked value")
 }
 
-/// The packs with an effect: the recipes of the module, in file order.
-fn module_recipes(family: &str) -> Vec<toml::Table> {
+/// The packs of a menu with an effect: the recipes of its module, in file
+/// order.
+fn module_recipes(family: &str, menu: &str) -> Vec<toml::Table> {
     packs(family)
         .into_iter()
         .filter(|pack| text(pack, "effect").is_some_and(|e| !e.is_empty()))
+        .filter(|pack| text(pack, "menu") == Some(menu))
         .collect()
+}
+
+#[test]
+fn each_menu_fits_a_settings_row() {
+    for family in FAMILIES {
+        for (menu, _) in MENUS {
+            let count = module_recipes(family, menu).len();
+            assert!(
+                (1..=MENU_RECIPES).contains(&count),
+                "{family} menu {menu}: {count} recipes"
+            );
+        }
+    }
 }
 
 /// The viewfinder label of a pack: its name in capitals. The module draws
@@ -151,11 +177,12 @@ fn label(name: &str) -> String {
     label
 }
 
-/// The C header of the recipes of a family (extras/recipe/recipes-<family>.h).
-fn recipe_header(family: &str) -> String {
-    let recipes = module_recipes(family);
+/// The C header of the recipes of a family in a menu
+/// (<module folder>/recipes-<family>.h).
+fn recipe_header(family: &str, menu: &str) -> String {
+    let recipes = module_recipes(family, menu);
     let mut out = format!(
-        "/* Generated from recipes/{family}.toml by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef RECIPES_{upper}_H\n#define RECIPES_{upper}_H\n#define RECIPE_COUNT {count}U\nstatic const Recipe recipes[RECIPE_COUNT] = {{\n",
+        "/* Generated from menu {menu} of recipes/{family}.toml by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef RECIPES_{upper}_H\n#define RECIPES_{upper}_H\n#define RECIPE_COUNT {count}U\nstatic const Recipe recipes[RECIPE_COUNT] = {{\n",
         upper = family.to_uppercase(),
         count = recipes.len()
     );
@@ -180,29 +207,37 @@ fn recipe_header(family: &str) -> String {
 fn the_recipe_headers_follow_the_recipes() {
     let update = std::env::var_os("GRKIT_UPDATE_GENERATED").is_some();
     for family in FAMILIES {
-        let path = root().join(format!("extras/recipe/recipes-{family}.h"));
-        let expected = recipe_header(family);
-        if update {
-            std::fs::write(&path, &expected).unwrap();
+        for (menu, folder) in MENUS {
+            let path = root().join(format!("{folder}/recipes-{family}.h"));
+            let expected = recipe_header(family, menu);
+            if update {
+                std::fs::write(&path, &expected).unwrap();
+            }
+            let actual = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                actual == expected,
+                "{} is out of date: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes",
+                path.display()
+            );
         }
-        let actual = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(
-            actual == expected,
-            "{} is out of date: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes",
-            path.display()
-        );
     }
 }
 
-/// The module lists the recipes of the packs: a PICK value, a menu row, and a
-/// tile for each, after Off.
+/// Each Recipe module lists the recipes of its menu: a PICK value, a menu
+/// row, and a tile for each, after Off.
 #[test]
-fn the_recipe_module_lists_each_recipe() {
-    let names: Vec<String> = module_recipes("gr4")
+fn the_recipe_modules_list_each_recipe() {
+    for (menu, folder) in MENUS {
+        check_module(menu, folder);
+    }
+}
+
+fn check_module(menu: &str, folder: &str) {
+    let names: Vec<String> = module_recipes("gr4", menu)
         .iter()
         .map(|pack| text(pack, "name").unwrap().to_owned())
         .collect();
-    let directory = root().join("extras/recipe");
+    let directory = root().join(folder);
     let manifest: toml::Table = std::fs::read_to_string(directory.join("module.toml"))
         .unwrap()
         .parse()

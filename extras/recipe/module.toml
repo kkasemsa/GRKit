@@ -1,6 +1,8 @@
-# Recipe: a short menu of film recipes, each a Film Look with its grain and
-# an optional aspect. The recipes are data of the camera family:
-# recipes/<family>.toml, generated into recipes-<family>.h. recipes.h selects
+# Recipe A: a short menu of film recipes, each a Film Look with its grain and
+# an optional aspect: the colour negatives. Recipe B (extras/recipe-b) has the
+# black-and-white, slide, and cinema recipes; choosing one in either menu
+# sets the other to Off. The recipes are data of the camera family: menu "a"
+# of recipes/<family>.toml, generated into recipes-<family>.h. recipes.h selects
 # the family; scripts/recipe-module.sh builds the module of a family.
 id = "RECIPE"
 version = 1
@@ -12,17 +14,16 @@ tiles = [
     "tiles/0-module.png",
     "tiles/1-portra-400.png",
     "tiles/2-ektar-100.png",
-    "tiles/3-hp5-400.png",
-    "tiles/4-trix-400.png",
+    "tiles/3-gold-200.png",
+    "tiles/4-ultramax-400.png",
     "tiles/5-c200.png",
-    "tiles/6-ultramax-400.png",
 ]
-uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT"]
+uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT", "?RECIPEB.PICK"]
 
 # 0 Off, then recipe n - 1 of recipes.h.
 [[settings]]
 key = "PICK"
-values = 7
+values = 6
 saved = true
 public = true
 

@@ -1,0 +1,13 @@
+title = "レシピ B"
+rows = ["オフ", "HP5 Plus 400", "Tri-X 400", "Provia 100F", "Eterna 500T"]
+
+[settings.PICK]
+label = "レシピ"
+
+[settings.RESET]
+label = "レシピをリセット"
+values = ["保持", "リセット"]
+
+[settings.NAME]
+label = "レシピ名"
+values = ["表示", "非表示"]
