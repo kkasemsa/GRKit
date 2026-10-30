@@ -1,0 +1,13 @@
+title = "필름"
+rows = ["꺼짐", "12컷", "24컷", "36컷"]
+
+[settings.LENGTH]
+label = "필름 길이"
+
+[settings.EDGE]
+label = "필름 가장자리"
+values = ["꺼짐", "켜짐"]
+
+[settings.NEW]
+label = "새 필름"
+values = ["유지", "장전"]

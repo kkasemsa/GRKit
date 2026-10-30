@@ -1,0 +1,13 @@
+title = "フィルム"
+rows = ["オフ", "12枚撮り", "24枚撮り", "36枚撮り"]
+
+[settings.LENGTH]
+label = "撮影枚数"
+
+[settings.EDGE]
+label = "フィルムの縁"
+values = ["オフ", "オン"]
+
+[settings.NEW]
+label = "新しいフィルム"
+values = ["保持", "装填"]

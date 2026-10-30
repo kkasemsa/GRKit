@@ -1,0 +1,13 @@
+title = "胶卷"
+rows = ["关闭", "12 张", "24 张", "36 张"]
+
+[settings.LENGTH]
+label = "胶卷长度"
+
+[settings.EDGE]
+label = "片边字"
+values = ["关闭", "开启"]
+
+[settings.NEW]
+label = "新胶卷"
+values = ["保持", "装入"]

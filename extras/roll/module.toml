@@ -1,0 +1,65 @@
+# Load a Roll: shoot a roll of 12, 24, or 36 frames of the chosen recipe,
+# with a frame counter in the viewfinder and an optional film edge on each
+# picture. The film is the chosen recipe of the Recipe module; films.h is
+# generated from recipes/gr4.toml (crates/grkit-core/tests/recipes.rs).
+id = "ROLL"
+version = 1
+# The default place in ADJ and in MENU: after Recipe (5).
+order = 6
+sources = ["roll.c"]
+# Tile n shows length n. Tile 0 is the module tile, for Off at the root.
+tiles = [
+    "tiles/0-module.png",
+    "tiles/1-12.png",
+    "tiles/2-24.png",
+    "tiles/3-36.png",
+]
+uses = ["?RECIPE.PICK"]
+
+# 0 Off, 1 12 frames, 2 24 frames, 3 36 frames. A change loads an empty roll.
+[[settings]]
+key = "LENGTH"
+values = 4
+saved = true
+public = true
+
+# The frames shot of the roll: 0 to 36. It survives power-off.
+[[settings]]
+key = "COUNT"
+values = 37
+saved = true
+public = true
+
+# The film edge on each picture: 0 Off, 1 On.
+[[settings]]
+key = "EDGE"
+values = 2
+saved = true
+
+# 0 Keep. 1 loads an empty roll of the same length and returns to Keep.
+[[settings]]
+key = "NEW"
+values = 2
+
+[page]
+setting = "LENGTH"
+off_row = true
+settings = ["LENGTH", "EDGE", "NEW"]
+
+[events]
+handle = "roll_event"
+on = ["setting_changed"]
+
+# Counts each recorded picture, and prints the film edge first among the
+# marks, before Date Imprint, as a frame stage.
+[[filters]]
+apply = "roll_apply"
+setting = "LENGTH"
+stage = "frame"
+
+[[layers]]
+paint = "roll_counter"
+setting = "LENGTH"
+order = 46
+full_disp = true
+live_only = true
