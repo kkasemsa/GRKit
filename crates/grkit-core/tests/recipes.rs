@@ -121,3 +121,125 @@ fn the_families_share_each_look() {
         );
     }
 }
+
+/// The value of a recipe field in CORE.GRAIN, CORE.GRAIN_SIZE, or CORE.ASPECT.
+fn index(values: &[&str], value: &str) -> usize {
+    values
+        .iter()
+        .position(|v| *v == value)
+        .expect("a checked value")
+}
+
+/// The packs with an effect: the recipes of the module, in file order.
+fn module_recipes(family: &str) -> Vec<toml::Table> {
+    packs(family)
+        .into_iter()
+        .filter(|pack| text(pack, "effect").is_some_and(|e| !e.is_empty()))
+        .collect()
+}
+
+/// The viewfinder label of a pack: its name in capitals. The module draws
+/// capitals, digits, space, '-', '+', and '.'.
+fn label(name: &str) -> String {
+    let label = name.to_uppercase();
+    assert!(
+        label
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || " -+.".contains(c)),
+        "{name}: the viewfinder font has no character for it"
+    );
+    label
+}
+
+/// The C header of the recipes of a family (extras/recipe/recipes-<family>.h).
+fn recipe_header(family: &str) -> String {
+    let recipes = module_recipes(family);
+    let mut out = format!(
+        "/* Generated from recipes/{family}.toml by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef RECIPES_{upper}_H\n#define RECIPES_{upper}_H\n#define RECIPE_COUNT {count}U\nstatic const Recipe recipes[RECIPE_COUNT] = {{\n",
+        upper = family.to_uppercase(),
+        count = recipes.len()
+    );
+    for pack in &recipes {
+        let aspect = text(pack, "aspect").map_or("RECIPE_NO_ASPECT".to_owned(), |a| {
+            index(&ASPECTS, a).to_string()
+        });
+        out.push_str(&format!(
+            "    {{\"{}\", \"{}\", {}, {}, {}, 0}},\n",
+            text(pack, "effect").unwrap(),
+            label(text(pack, "name").unwrap()),
+            index(&GRAINS, text(pack, "grain").unwrap()),
+            index(&GRAIN_SIZES, text(pack, "grain_size").unwrap()),
+            aspect
+        ));
+    }
+    out.push_str("};\n#endif\n");
+    out
+}
+
+#[test]
+fn the_recipe_headers_follow_the_recipes() {
+    let update = std::env::var_os("GRKIT_UPDATE_GENERATED").is_some();
+    for family in FAMILIES {
+        let path = root().join(format!("extras/recipe/recipes-{family}.h"));
+        let expected = recipe_header(family);
+        if update {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            actual == expected,
+            "{} is out of date: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes",
+            path.display()
+        );
+    }
+}
+
+/// The module lists the recipes of the packs: a PICK value, a menu row, and a
+/// tile for each, after Off.
+#[test]
+fn the_recipe_module_lists_each_recipe() {
+    let names: Vec<String> = module_recipes("gr4")
+        .iter()
+        .map(|pack| text(pack, "name").unwrap().to_owned())
+        .collect();
+    let directory = root().join("extras/recipe");
+    let manifest: toml::Table = std::fs::read_to_string(directory.join("module.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pick = manifest["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"].as_str() == Some("PICK"))
+        .expect("a PICK setting");
+    assert_eq!(
+        pick["values"].as_integer(),
+        Some(names.len() as i64 + 1),
+        "PICK values"
+    );
+    assert_eq!(
+        manifest["tiles"].as_array().unwrap().len(),
+        names.len() + 1,
+        "tiles"
+    );
+    for language in ["en", "zh-Hans", "zh-Hant", "ja", "ko"] {
+        let text: toml::Table =
+            std::fs::read_to_string(directory.join(format!("text/{language}.toml")))
+                .unwrap()
+                .parse()
+                .unwrap();
+        let rows: Vec<&str> = text["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(rows.len(), names.len() + 1, "{language}: rows");
+        assert_eq!(
+            &rows[1..],
+            names.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{language}: recipe names"
+        );
+    }
+}

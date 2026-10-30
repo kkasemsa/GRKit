@@ -11,8 +11,11 @@ u32 grkit_test_labels;
 u32 grkit_test_label[3];
 /* The module settings start at handle GRKIT_TEST_SETTING_BASE, as they
    start at a handle above 0 on the camera, so a test finds a SETTING_<KEY>
-   that the code wraps in GRKIT_SETTING again. No setting is used. */
-const GrkitContext grkit_self = {GRKIT_TEST_SETTING_BASE, GRKIT_TEST_SETTINGS - GRKIT_TEST_SETTING_BASE, 0};
+   that the code wraps in GRKIT_SETTING again. Used setting n has handle n,
+   below the settings of the module (grkit_test.h). */
+const GrkitContext grkit_self = {GRKIT_TEST_SETTING_BASE, GRKIT_TEST_SETTINGS - GRKIT_TEST_SETTING_BASE, 0,
+                                 {0, 1, 2, 3, 4, 5, 6, 7}};
+_Static_assert(GRKIT_TEST_USES == 8U && GRKIT_TEST_USES <= GRKIT_TEST_SETTING_BASE, "The used handles stay below the module settings");
 
 volatile u32 *grkit_test_pixels(u32 address)
 {

@@ -40,15 +40,23 @@ fn synthetic_probe_module_builds() -> Result<()> {
     Ok(())
 }
 
-/// The module folders of the repository (`modules/<id>`).
+/// The module folders of the repository: the official modules
+/// (`modules/<id>`), then the modules that releases do not build
+/// (`extras/<id>`, extras/README.md).
 fn module_folders() -> Vec<std::path::PathBuf> {
-    let mut folders: Vec<_> =
-        fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules"))
-            .unwrap()
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut folders = Vec::new();
+    for parent in ["modules", "extras"] {
+        let Ok(entries) = fs::read_dir(root.join(parent)) else {
+            continue;
+        };
+        let mut found: Vec<_> = entries
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.join("module.toml").is_file())
             .collect();
-    folders.sort();
+        found.sort();
+        folders.extend(found);
+    }
     folders
 }
 

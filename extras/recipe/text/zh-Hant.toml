@@ -1,0 +1,13 @@
+title = "配方"
+rows = ["關閉", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400"]
+
+[settings.PICK]
+label = "配方"
+
+[settings.RESET]
+label = "重設配方"
+values = ["保持", "重設"]
+
+[settings.NAME]
+label = "配方名稱"
+values = ["顯示", "隱藏"]

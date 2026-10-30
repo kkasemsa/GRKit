@@ -1,0 +1,13 @@
+title = "레시피"
+rows = ["꺼짐", "Portra 400", "Ektar 100", "HP5 Plus 400", "Tri-X 400"]
+
+[settings.PICK]
+label = "레시피"
+
+[settings.RESET]
+label = "레시피 초기화"
+values = ["유지", "초기화"]
+
+[settings.NAME]
+label = "레시피 이름"
+values = ["표시", "숨김"]

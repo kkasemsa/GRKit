@@ -37,6 +37,10 @@ Surface grkit_test_surface(const u16 *box);
    harness use them. */
 #define GRKIT_TEST_SETTINGS 64U
 #define GRKIT_TEST_SETTING_BASE 16U
+/* Used setting n of the module (`uses` in module.toml) has handle n, so its
+   entry is grkit_test_settings[USED_<MODULE>_<KEY>]. A module uses at most
+   GRKIT_TEST_USES settings. */
+#define GRKIT_TEST_USES 8U
 extern u32 grkit_test_settings[GRKIT_TEST_SETTINGS];
 /* The IDs of the installed effects, in the order of CORE.TONE: effect_find
    returns n + 1 for entry n. The list ends at the first 0. */
