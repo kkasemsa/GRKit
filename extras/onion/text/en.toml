@@ -1,0 +1,21 @@
+title = "Onion Skin"
+rows = ["Off", "Last Shot", "Hold Reference", "Pose Guide"]
+
+[settings.MODE]
+label = "Onion Skin Mode"
+
+[settings.POSE]
+label = "Pose"
+values = ["Head and Shoulders", "Three-Quarter Turn", "Hand to Chin", "Arms Crossed", "Standing", "Leaning on a Wall", "Seated", "Walking"]
+
+[settings.STYLE]
+label = "Ghost Style"
+values = ["Faint", "Strong", "Edges"]
+
+[settings.MIRROR]
+label = "Mirror Pose"
+values = ["Off", "On"]
+
+[settings.SIZE]
+label = "Pose Size"
+values = ["Large", "Medium", "Small"]

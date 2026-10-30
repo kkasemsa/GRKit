@@ -1,0 +1,21 @@
+title = "参考叠影"
+rows = ["关闭", "上一张", "固定参考", "姿势参考"]
+
+[settings.MODE]
+label = "叠影模式"
+
+[settings.POSE]
+label = "姿势"
+values = ["头肩", "四分之三侧身", "手托下巴", "双臂交叉", "站姿", "倚墙", "坐姿", "行走"]
+
+[settings.STYLE]
+label = "叠影样式"
+values = ["淡", "浓", "轮廓"]
+
+[settings.MIRROR]
+label = "镜像姿势"
+values = ["关闭", "开启"]
+
+[settings.SIZE]
+label = "姿势大小"
+values = ["大", "中", "小"]

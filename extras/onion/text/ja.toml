@@ -1,0 +1,21 @@
+title = "オニオンスキン"
+rows = ["オフ", "直前のショット", "参照を固定", "ポーズガイド"]
+
+[settings.MODE]
+label = "表示モード"
+
+[settings.POSE]
+label = "ポーズ"
+values = ["顔と肩", "斜め向き", "頬杖", "腕組み", "立ちポーズ", "壁にもたれる", "座りポーズ", "歩きポーズ"]
+
+[settings.STYLE]
+label = "表示スタイル"
+values = ["薄く", "濃く", "輪郭"]
+
+[settings.MIRROR]
+label = "ポーズを反転"
+values = ["オフ", "オン"]
+
+[settings.SIZE]
+label = "ポーズの大きさ"
+values = ["大", "中", "小"]

@@ -1,0 +1,21 @@
+title = "參考疊影"
+rows = ["關閉", "上一張", "固定參考", "姿勢參考"]
+
+[settings.MODE]
+label = "疊影模式"
+
+[settings.POSE]
+label = "姿勢"
+values = ["頭肩", "四分之三側身", "手托下巴", "雙臂交叉", "站姿", "倚牆", "坐姿", "行走"]
+
+[settings.STYLE]
+label = "疊影樣式"
+values = ["淡", "濃", "輪廓"]
+
+[settings.MIRROR]
+label = "鏡像姿勢"
+values = ["關閉", "開啟"]
+
+[settings.SIZE]
+label = "姿勢大小"
+values = ["大", "中", "小"]

@@ -1,0 +1,67 @@
+# Onion Skin: a faint picture over the live view to line up a shot: the last
+# shot, a held reference, or a built-in pose silhouette (poses.h, drawn by
+# poses.py).
+id = "ONION"
+version = 1
+# The default place in ADJ and in MENU: after Roll (6).
+order = 7
+sources = ["onion.c"]
+# Tile n shows mode n. Tile 0 is the module tile, for Off at the root.
+tiles = [
+    "tiles/0-module.png",
+    "tiles/1-last.png",
+    "tiles/2-hold.png",
+    "tiles/3-pose.png",
+]
+
+# 0 Off, 1 Last Shot, 2 Hold Reference, 3 Pose Guide.
+[[settings]]
+key = "MODE"
+values = 4
+saved = true
+public = true
+
+# The pose of Pose Guide, in the order of poses.h.
+[[settings]]
+key = "POSE"
+values = 8
+saved = true
+
+# 0 Faint, 1 Strong, 2 Edges.
+[[settings]]
+key = "STYLE"
+values = 3
+saved = true
+
+# The pose mirrored left to right: 0 Off, 1 On.
+[[settings]]
+key = "MIRROR"
+values = 2
+saved = true
+
+# The pose height: 0 Large (90% of the photo area), 1 Medium (70%), 2 Small (50%).
+[[settings]]
+key = "SIZE"
+values = 3
+saved = true
+
+[page]
+setting = "MODE"
+off_row = true
+settings = ["MODE", "POSE", "STYLE", "MIRROR", "SIZE"]
+
+[events]
+handle = "onion_event"
+on = ["setting_changed"]
+
+# Takes the picture for Last Shot and Hold Reference. It changes no picture.
+[[filters]]
+apply = "onion_apply"
+setting = "MODE"
+stage = "mark"
+
+# Over the Framing mask (10), under Guides (20).
+[[layers]]
+paint = "onion_paint"
+setting = "MODE"
+order = 15
