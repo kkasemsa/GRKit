@@ -557,6 +557,34 @@ static void the_event_ring_tells_menu_from_ok_and_adj(void)
 #endif
 }
 
+/* effect_find gives the CORE.TONE value of the record whose effect ID equals
+   its argument: the whole ID, not a prefix or a longer name. */
+static void effect_find_matches_whole_effect_ids(void)
+{
+    static const char *ids[] = {"portra-400-endura-v1", "ektar-100-edge-v1", "hp5-plus-400-mono-v1"};
+    reset();
+    test_header[GRKIT_HOST_RECORDS / 4] = TEST_OBJECTS;
+    test_header[GRKIT_HOST_COUNT / 4] = 3;
+    for (u32 i = 0; i < 3; ++i)
+        for (u32 k = 0; k <= strlen(ids[i]); ++k)
+            BYTE(TEST_OBJECTS + i * GRKIT_RECORD_SIZE + GRKIT_RECORD_ID, k) = (u8)ids[i][k];
+    assert(grkit_export_effect_find("portra-400-endura-v1") == 1);
+    assert(grkit_export_effect_find("ektar-100-edge-v1") == 2);
+    assert(grkit_export_effect_find("hp5-plus-400-mono-v1") == 3);
+    assert(grkit_export_effect_find("ektar-100-edge") == 0);
+    assert(grkit_export_effect_find("ektar-100-edge-v12") == 0);
+    assert(grkit_export_effect_find("trix-400-mono-v1") == 0);
+    assert(grkit_export_effect_find("") == 0);
+    assert(grkit_export_effect_find(0) == 0);
+    /* Only the installed records count. */
+    test_header[GRKIT_HOST_COUNT / 4] = 2;
+    assert(grkit_export_effect_find("hp5-plus-400-mono-v1") == 0);
+    test_header[GRKIT_HOST_COUNT / 4] = 0;
+    assert(grkit_export_effect_find("portra-400-endura-v1") == 0);
+    test_header[GRKIT_HOST_COUNT / 4] = GRKIT_TEXT_RECORDS + 1;
+    assert(grkit_export_effect_find("portra-400-endura-v1") == 0);
+}
+
 static void playback_matches_private_tags_only(void)
 {
     reset();
@@ -2112,6 +2140,7 @@ int main(void)
     list_restoration_keeps_the_committed_effect();
     the_event_ring_tells_menu_from_ok_and_adj();
     playback_matches_private_tags_only();
+    effect_find_matches_whole_effect_ids();
     icons_toolbar_and_edges_map_their_ids();
     adj_exits_return_once_for_the_parameter_page();
     a_half_press_keeps_the_parameter_session();

@@ -20,7 +20,7 @@ typedef unsigned char u8;
    equals that of the core and whose minor version is not larger. A minor
    version only adds functions and registration types. */
 #define GRKIT_ABI_MAJOR 2U
-#define GRKIT_ABI_MINOR 0U
+#define GRKIT_ABI_MINOR 1U
 #define GRKIT_ABI (GRKIT_ABI_MAJOR << 16 | GRKIT_ABI_MINOR)
 
 /* ---- overlay.layer -------------------------------------------------------- */
@@ -140,6 +140,14 @@ typedef struct {
     u32 uses[];        /* the handle of each used setting */
 } GrkitContext;
 extern const GrkitContext grkit_self;
+
+/* The value of CORE.TONE for the installed effect whose ID is `id`, such as
+   "portra-400-endura-v1", or 0 when no installed effect has that ID. The ID is
+   the stable name of an effect (effects/README.md); its value can change at
+   each start, so find it again before each use and never save it. Pass the
+   value to setting_set of a used CORE.TONE, which ignores an effect that the
+   core does not offer. Since ABI 2.1. */
+u32 effect_find(const char *id);
 
 /* The value of a setting, or 0 for GRKIT_NO_SETTING. */
 u32 setting_get(u32 handle);

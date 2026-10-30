@@ -38,6 +38,10 @@ Surface grkit_test_surface(const u16 *box);
 #define GRKIT_TEST_SETTINGS 64U
 #define GRKIT_TEST_SETTING_BASE 16U
 extern u32 grkit_test_settings[GRKIT_TEST_SETTINGS];
+/* The IDs of the installed effects, in the order of CORE.TONE: effect_find
+   returns n + 1 for entry n. The list ends at the first 0. */
+#define GRKIT_TEST_EFFECTS 20U
+extern const char *grkit_test_effects[GRKIT_TEST_EFFECTS];
 /* The calls of overlay_label, and the label, left, and top of the last one. */
 extern u32 grkit_test_labels;
 extern u32 grkit_test_label[3];

@@ -237,6 +237,7 @@ A module calls the core only through these functions. The installer links each c
 | --- | --- |
 | `u32 setting_get(u32 handle)` | The value of a setting. 0 for `GRKIT_NO_SETTING`. |
 | `void setting_set(u32 handle, u32 value)` | Set a setting. A value out of range does nothing. |
+| `u32 effect_find(const char *id)` | The value of `CORE.TONE` for the installed effect with the effect ID `id`, such as `"portra-400-endura-v1"`, or 0. Since ABI 2.1. See [Finding an effect](#finding-an-effect). |
 | `void overlay_label(const Surface *s, u32 label, u32 left, u32 top)` | Draw a label of the core with its top left at (left, top), in the style of the native live-view text. A label that does not fit draws nothing. |
 | `void local_time(GrkitDateTime *out)` | The local time: year, month, day, hour, minute, and second. |
 | `u32 divide(u32 n, u32 d)` | n / d, rounded down, for d > 0. |
@@ -262,6 +263,17 @@ A module calls the core only through these functions. The installer links each c
 `LABEL_TOP` is the top of a label in the second row of the native live-view text. `LABEL_LEFT` is the left edge that lines up with the native icons. A capture area label is at most 80 pixels wide, so a second label of the row starts at `LABEL_NEXT_LEFT` and never covers it.
 
 A module also imports `grkit_self`, its context, which `GRKIT_SETTING` and `GRKIT_USED` use. `grkit_core::grm::EXPORTS` lists the exported functions. A new service is an addition to that list and to `grkit.h`, and it raises the minor ABI version.
+
+### Finding an effect
+
+The value of an effect in `CORE.TONE` is its place among the installed effects at this start, and it can change at the next start. An effect ID, the directory name in `effects/`, stays the same (effects/README.md). To select a known effect, such as for a recipe, find its value by its ID each time, then set it:
+
+```c
+u32 value = effect_find("portra-400-endura-v1");
+if (value) setting_set(USED_CORE_TONE, value);
+```
+
+`effect_find` returns 0 when no installed effect has the ID: the file is not in the effects library, or it did not install at this start. `setting_set` ignores a value that the core does not offer. The host test harness lists the installed effects in `grkit_test_effects`.
 
 ## Events
 
@@ -292,7 +304,7 @@ The UI services work only in an event handler, a timer callback, or a UI callbac
 
 ## ABI and compatibility
 
-**ABI version.** `GRKIT_ABI` is 2.0: the major version in the high 16 bits, the minor version in the low 16 bits. The build writes it into the file header and into the descriptor. The installer loads a module whose major version equals that of the core and whose minor version is not larger. A minor version only adds functions and registration types. A major version changes a layout. In 2.0, each text list also has a Korean text, so the installer rejects a module with ABI 1.0 (status 51). Build such a module again with a `text/ko.toml`.
+**ABI version.** `GRKIT_ABI` is 2.1: the major version in the high 16 bits, the minor version in the low 16 bits. The build writes it into the file header and into the descriptor. The installer loads a module whose major version equals that of the core and whose minor version is not larger. A minor version only adds functions and registration types. A major version changes a layout. In 2.0, each text list also has a Korean text, so the installer rejects a module with ABI 1.0 (status 51). Build such a module again with a `text/ko.toml`. 2.1 adds `effect_find`. A module built with the 2.1 SDK has ABI 2.1, so a core of ABI 2.0 rejects it (status 51), also when the module does not call `effect_find`.
 
 **File format.** A module file is GRM version 1 (`grkit_core::grm`): a header, the code, the data, the relocations, and the imports. The build compiles each source as Thumb code for ARMv7-A with `-Os`. The installer only moves absolute 32-bit words and fills the imports by name hash. The build rejects other relocation types and each undefined symbol that is not a service or `grkit_self`.
 

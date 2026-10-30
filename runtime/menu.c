@@ -227,6 +227,23 @@ static void tone_stored(volatile u32 *h) { level_reapply(h); }
 /* The core exports this service to modules (runtime/sdk/grkit.h). It runs
    in the context of its caller. */
 __attribute__((used)) void grkit_export_setting_set(u32 handle,u32 value) { setting_store(menu_header(),handle,value); }
+/* The value of CORE.TONE for the installed effect whose ID is `id`, or 0.
+   Each record keeps the ID of its effect file (GRKIT_RECORD_ID), so a module
+   names an effect by its stable ID and never keeps a value across a start.
+   setting_set decides whether the value is offered. */
+__attribute__((used)) u32 grkit_export_effect_find(const char *id) {
+    volatile u32 *h=menu_header();
+    u32 n=h[GRKIT_HOST_COUNT/4], i, k;
+    if(!id || n>GRKIT_TEXT_RECORDS) return 0;
+    for(i=0;i<n;++i) {
+        u32 stored=h[GRKIT_HOST_RECORDS/4]+i*GRKIT_RECORD_SIZE+GRKIT_RECORD_ID;
+        for(k=0;k<GRKIT_GRF_ID_SIZE;++k) {
+            if(BYTE(stored,k)!=(u8)id[k]) break;
+            if(!id[k]) return i+1;
+        }
+    }
+    return 0;
+}
 static u32 private_mode(u32 controller) {
     volatile u32 *h=menu_header();
     return h[GRKIT_HOST_MENU_CONTROLLER/4] == controller && h[GRKIT_HOST_MENU_LEVEL/4] != 0;

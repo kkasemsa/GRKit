@@ -120,6 +120,17 @@ u32 ui_slider(GrkitText text, u32 min, u32 max, u32 value, void (*changed)(u32 v
     grkit_test_ui_arg = arg;
     return test_ui(text);
 }
+const char *grkit_test_effects[GRKIT_TEST_EFFECTS];
+u32 effect_find(const char *id)
+{
+    u32 i, k;
+    if (!id) return 0;
+    for (i = 0; i < GRKIT_TEST_EFFECTS && grkit_test_effects[i]; ++i) {
+        for (k = 0; grkit_test_effects[i][k] == id[k] && id[k]; ++k) {}
+        if (grkit_test_effects[i][k] == id[k]) return i + 1;
+    }
+    return 0;
+}
 u32 grkit_test_native;
 void (*grkit_test_native_back)(u32 arg);
 u32 ui_open_native(u32 screen, void (*back)(u32 arg), u32 arg)
