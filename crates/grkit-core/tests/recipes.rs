@@ -243,36 +243,3 @@ fn the_recipe_module_lists_each_recipe() {
         );
     }
 }
-
-/// The film names of the Roll module (extras/roll/films.h): the viewfinder
-/// label of each recipe, in the order of RECIPE.PICK. Both families list the
-/// same names (the_families_share_each_look), so one header serves both.
-fn films_header() -> String {
-    let names: Vec<String> = module_recipes("gr4")
-        .iter()
-        .map(|pack| label(text(pack, "name").unwrap()))
-        .collect();
-    let mut out = format!(
-        "/* Generated from recipes/gr4.toml by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef ROLL_FILMS_H\n#define ROLL_FILMS_H\n#define FILM_COUNT {}U\nstatic const char *const films[FILM_COUNT] = {{\n",
-        names.len()
-    );
-    for name in &names {
-        out.push_str(&format!("    \"{name}\",\n"));
-    }
-    out.push_str("};\n#endif\n");
-    out
-}
-
-#[test]
-fn the_roll_film_names_follow_the_recipes() {
-    let path = root().join("extras/roll/films.h");
-    let expected = films_header();
-    if std::env::var_os("GRKIT_UPDATE_GENERATED").is_some() {
-        std::fs::write(&path, &expected).unwrap();
-    }
-    assert!(
-        std::fs::read_to_string(&path).unwrap_or_default() == expected,
-        "{} is out of date: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes",
-        path.display()
-    );
-}

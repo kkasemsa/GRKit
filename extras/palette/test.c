@@ -1,5 +1,5 @@
 /* The host test of Palette Card (grkit module test): finding the colours,
-   the hex codes, the layouts in each posture, and Roll's film edge. */
+   the hex codes, and the layouts in each posture. */
 #include <assert.h>
 #include <string.h>
 #include "grkit_module.h"
@@ -55,8 +55,7 @@ int main(void)
     Color c[7];
     u32 n;
 
-    /* The descriptor: LAYOUT, COLORS, HEX, two used settings of Roll; a page
-       and a plane filter. */
+    /* The descriptor: LAYOUT, COLORS, HEX; a page and a plane filter. */
     assert(grkit_module.setting_count == 3 && grkit_module.registration_count == 2);
     assert(grkit_module.tile_count == 4);
     memset(grkit_test_settings, 0, sizeof(grkit_test_settings));
@@ -143,24 +142,6 @@ int main(void)
         assert(luma(p, cx + d + d / 3, cy) == 200);
         /* The corner of the box of a disc stays photo. */
         assert(luma(p, cx - d / 2 + 1, cy - d / 2 + 1) == 60);
-    }
-
-    /* Roll's film edge: the strip sits above it, and its colour is not
-       sampled. */
-    set = pictures();
-    bands(&set.planes[0], scene);
-    {
-        Plane *p = &set.planes[0];
-        u32 edge = MAIN_H * 82 / 1000;
-        for (u32 y = MAIN_H - edge; y < MAIN_H; ++y)
-            for (u32 x = 0; x < MAIN_W; ++x) GRKIT_BYTES(p->y + y * p->pitch + x)[0] = 20;
-        grkit_test_settings[USED_ROLL_LENGTH] = 3;
-        grkit_test_settings[USED_ROLL_EDGE] = 1;
-        palette_apply(&set, 1);
-        assert(luma(p, 100, MAIN_H - 1) == 20);
-        assert(luma(p, 100, MAIN_H - edge - 1) == 60 && luma(p, 1100, MAIN_H - edge - 1) == 120);
-        grkit_test_settings[USED_ROLL_LENGTH] = 0;
-        grkit_test_settings[USED_ROLL_EDGE] = 0;
     }
 
     /* A monochrome picture gets grey swatches. */

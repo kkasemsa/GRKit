@@ -8,7 +8,7 @@
    The colours are those of the recorded picture, after the Film Look: a
    median cut of a 64 x 43 grid of samples, refined by k-means, most common
    first. Hex codes are the sRGB of each colour (JFIF YCbCr). The swatches
-   follow the posture of the camera, and they stay off Roll's film edge. */
+   follow the posture of the camera. */
 #include "grkit.h"
 #include "grkit_module.h"
 
@@ -42,19 +42,11 @@ typedef struct { u32 y, cb, cr, n; } Color;
    tell hues apart, not only shades. */
 #define CHROMA_WEIGHT 2
 
-/* The film edge of Roll on the sensor frame: its height on a picture of
-   height h, as roll.c draws it, or 0 when Roll prints no edge. */
-static u32 film_edge(u32 h)
-{
-    if (!setting_get(USED_ROLL_LENGTH) || !setting_get(USED_ROLL_EDGE)) return 0;
-    return h * 82U / 1000U;
-}
-
 /* The grid of samples: the mean of 2 x 2 pixels at each grid point of the
-   visible area above the film edge. */
+   visible area. */
 static void sample(Work *w, const Plane *p, u32 mono)
 {
-    u32 width = p->right - p->left, height = p->bottom - p->top - film_edge(p->bottom - p->top);
+    u32 width = p->right - p->left, height = p->bottom - p->top;
     u32 gx, gy;
     for (gy = 0; gy < GRID_H; ++gy) {
         u32 y = p->top + (gy * 2 + 1) * height / (GRID_H * 2), y1 = y + 1 < p->bottom ? y + 1 : y;
@@ -202,7 +194,7 @@ static const u8 font[17][7] = {
 #define TEXT_DOTS 41U
 
 /* One picture of the shot, seen upright: its plane and posture, and the
-   upright area for the swatches, which leaves out the film edge. */
+   upright area for the swatches. */
 typedef struct {
     const Plane *p;
     u32 turns, mono;
@@ -333,7 +325,7 @@ static void dots(const View *v, const Color *c, u32 n, u32 with_hex)
 void palette_draw(const Plane *p, u32 turns, u32 mono, u32 layout, const Color *c, u32 n, u32 with_hex)
 {
     View v;
-    u32 w = p->right - p->left, h = p->bottom - p->top, edge = film_edge(h);
+    u32 w = p->right - p->left, h = p->bottom - p->top;
     v.p = p;
     v.turns = turns & 3;
     v.mono = mono;
@@ -341,14 +333,6 @@ void palette_draw(const Plane *p, u32 turns, u32 mono, u32 layout, const Color *
     v.t = 0;
     v.r = (int)(v.turns & 1 ? h : w);
     v.b = (int)(v.turns & 1 ? w : h);
-    /* The film edge is along the bottom of the sensor frame: upright, it is
-       at the bottom, the left, the top, or the right. */
-    switch (v.turns) {
-    case 0: v.b -= (int)edge; break;
-    case 1: v.l += (int)edge; break;
-    case 2: v.t += (int)edge; break;
-    default: v.r -= (int)edge; break;
-    }
     if (v.r - v.l < 16 || v.b - v.t < 16 || !n) return;
     if (layout == LAYOUT_DOTS) dots(&v, c, n, with_hex);
     else strip(&v, c, n, layout == LAYOUT_SIDE, with_hex);

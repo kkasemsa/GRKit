@@ -13,8 +13,6 @@ tiles = [
     "tiles/2-side.png",
     "tiles/3-dots.png",
 ]
-# Roll's film edge, so the swatches stay off it.
-uses = ["?ROLL.LENGTH", "?ROLL.EDGE"]
 
 # 0 Off, 1 Bottom Strip, 2 Side Strip, 3 Dots.
 [[settings]]
@@ -40,8 +38,7 @@ setting = "LAYOUT"
 off_row = true
 settings = ["LAYOUT", "COLORS", "HEX"]
 
-# After the colour of the Film Look and after Roll's film edge, before the
-# marks such as the date.
+# After the colour of the Film Look, before the marks such as the date.
 [[filters]]
 apply = "palette_apply"
 setting = "LAYOUT"
