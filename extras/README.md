@@ -9,6 +9,7 @@ build and test each one (`crates/grkit-build/src/tests/modules.rs`).
 | `look-workshop` | Scripts that render every Film Look on your DNGs for the look workshop page. Not a module. | See its README. |
 | `onion` | Onion Skin: a faint picture over the live view, from the last shot or a held reference. Needs module ABI 2.1. | `grkit module build --dir extras/onion --out ONION.GRM` |
 | `roll` | Load a Roll: a roll of 12, 24, or 36 frames of the chosen recipe, a frame counter in the viewfinder, and an optional film edge on each picture. Uses `RECIPE.PICK` when Recipe loads. Needs module ABI 2.1. | `grkit module build --dir extras/roll --out ROLL.GRM` |
+| `palette` | Palette Card: the main colours of each photo as swatches over its edge, a bottom strip, a side strip, or dots, with optional hex codes. It keeps off Roll's film edge. | `grkit module build --dir extras/palette --out PALETTE.GRM` |
 | `recipe` | Recipe: film recipes, each a Film Look with its grain, chosen from one menu. Its recipes are data of the camera family (`recipes/gr3.toml`, `recipes/gr4.toml`). It needs a GRKit with `effect_find` (module ABI 2.1). | `sh scripts/recipe-module.sh gr3\|gr4 OUT.GRM` |
 
 To install an extra module, copy its `.GRM` file to `GRKIT/MODULES` on the

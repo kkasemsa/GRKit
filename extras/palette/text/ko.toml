@@ -1,0 +1,13 @@
+title = "컬러 팔레트"
+rows = ["꺼짐", "아래 띠", "옆 띠", "점"]
+
+[settings.LAYOUT]
+label = "레이아웃"
+
+[settings.COLORS]
+label = "색상 수"
+values = ["5색", "3색", "7색"]
+
+[settings.HEX]
+label = "색상 코드"
+values = ["꺼짐", "켜짐"]

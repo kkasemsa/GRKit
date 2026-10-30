@@ -1,0 +1,13 @@
+title = "色卡"
+rows = ["關閉", "底部色條", "側邊色條", "圓點"]
+
+[settings.LAYOUT]
+label = "版式"
+
+[settings.COLORS]
+label = "顏色數量"
+values = ["5 色", "3 色", "7 色"]
+
+[settings.HEX]
+label = "色碼"
+values = ["關閉", "開啟"]

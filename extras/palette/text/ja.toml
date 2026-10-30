@@ -1,0 +1,13 @@
+title = "カラーパレット"
+rows = ["オフ", "下に帯", "横に帯", "ドット"]
+
+[settings.LAYOUT]
+label = "レイアウト"
+
+[settings.COLORS]
+label = "色の数"
+values = ["5色", "3色", "7色"]
+
+[settings.HEX]
+label = "カラーコード"
+values = ["オフ", "オン"]

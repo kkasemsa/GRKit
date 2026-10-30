@@ -30,11 +30,13 @@ values = 37
 saved = true
 public = true
 
-# The film edge on each picture: 0 Off, 1 On.
+# The film edge on each picture: 0 Off, 1 On. Public, so Palette can keep
+# its strip off the film edge.
 [[settings]]
 key = "EDGE"
 values = 2
 saved = true
+public = true
 
 # 0 Keep. 1 loads an empty roll of the same length and returns to Keep.
 [[settings]]

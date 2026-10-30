@@ -1,0 +1,13 @@
+title = "Palette Card"
+rows = ["Off", "Bottom Strip", "Side Strip", "Dots"]
+
+[settings.LAYOUT]
+label = "Layout"
+
+[settings.COLORS]
+label = "Number of Colours"
+values = ["5", "3", "7"]
+
+[settings.HEX]
+label = "Hex Codes"
+values = ["Off", "On"]

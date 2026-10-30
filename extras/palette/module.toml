@@ -1,0 +1,48 @@
+# Palette Card: the main colours of each photo, as swatches on the photo,
+# with their hex codes. A module cannot enlarge the picture, so the swatches
+# cover the edge of the photo. Off by default.
+id = "PALETTE"
+version = 1
+# The default place in ADJ and in MENU: after Onion Skin (7).
+order = 8
+sources = ["palette.c"]
+# Tile n shows layout n. Tile 0 is the module tile, for Off at the root.
+tiles = [
+    "tiles/0-module.png",
+    "tiles/1-bottom.png",
+    "tiles/2-side.png",
+    "tiles/3-dots.png",
+]
+# Roll's film edge, so the swatches stay off it.
+uses = ["?ROLL.LENGTH", "?ROLL.EDGE"]
+
+# 0 Off, 1 Bottom Strip, 2 Side Strip, 3 Dots.
+[[settings]]
+key = "LAYOUT"
+values = 4
+saved = true
+public = true
+
+# The number of colours: 0 five, 1 three, 2 seven.
+[[settings]]
+key = "COLORS"
+values = 3
+saved = true
+
+# The hex code of each colour: 0 Off, 1 On.
+[[settings]]
+key = "HEX"
+values = 2
+saved = true
+
+[page]
+setting = "LAYOUT"
+off_row = true
+settings = ["LAYOUT", "COLORS", "HEX"]
+
+# After the colour of the Film Look and after Roll's film edge, before the
+# marks such as the date.
+[[filters]]
+apply = "palette_apply"
+setting = "LAYOUT"
+stage = "frame"
