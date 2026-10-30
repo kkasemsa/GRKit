@@ -114,7 +114,7 @@ int main(void)
     assert((grkit_test_pixel(10, 240) & 0xff) == 220);
 
     /* Pose Guide: every pose draws, centred, standing on the bottom edge. */
-    for (u32 pose = 0; pose < 8; ++pose) {
+    for (u32 pose = 0; pose < 4; ++pose) {
         u32 fill, edge;
         grkit_test_clear();
         onion_pose(&s, pose, 0, 0, 0);
@@ -133,30 +133,31 @@ int main(void)
         onion_pose(&s, pose, 0, 0, 2);
         assert(lit() < fill);
     }
-    /* Standing (4): its head is left of centre; mirrored, right of centre. */
+    /* Over the shoulder (0): its head is right of centre; mirrored, left of
+       centre. */
     {
         u32 left = 0, right = 0;
         grkit_test_clear();
-        onion_pose(&s, 4, 0, 0, 0);
-        for (u32 y = 40; y < 80; ++y)
-            for (u32 x = 0; x < 720; ++x)
-                if (grkit_test_pixel(x, y) != GRKIT_TEST_CLEAR) { if (x < 360) ++left; else ++right; }
-        assert(left > right);
-        left = right = 0;
-        grkit_test_clear();
-        onion_pose(&s, 4, 0, 1, 0);
-        for (u32 y = 40; y < 80; ++y)
+        onion_pose(&s, 0, 0, 0, 0);
+        for (u32 y = 120; y < 160; ++y)
             for (u32 x = 0; x < 720; ++x)
                 if (grkit_test_pixel(x, y) != GRKIT_TEST_CLEAR) { if (x < 360) ++left; else ++right; }
         assert(right > left);
+        left = right = 0;
+        grkit_test_clear();
+        onion_pose(&s, 0, 0, 1, 0);
+        for (u32 y = 120; y < 160; ++y)
+            for (u32 x = 0; x < 720; ++x)
+                if (grkit_test_pixel(x, y) != GRKIT_TEST_CLEAR) { if (x < 360) ++left; else ++right; }
+        assert(left > right);
     }
     /* The layer draws the chosen pose; an unknown pose draws nothing. */
-    grkit_test_settings[SETTING_POSE] = 6;
+    grkit_test_settings[SETTING_POSE] = 3;
     grkit_test_clear();
     onion_paint(&s, MODE_POSE);
     assert(lit() > 1000);
     grkit_test_clear();
-    onion_pose(&s, 8, 0, 0, 0);
+    onion_pose(&s, 4, 0, 0, 0);
     assert(lit() == 0);
     /* Off draws nothing. */
     grkit_test_clear();

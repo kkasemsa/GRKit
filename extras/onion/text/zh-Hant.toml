@@ -6,7 +6,7 @@ label = "疊影模式"
 
 [settings.POSE]
 label = "姿勢"
-values = ["頭肩", "四分之三側身", "手托下巴", "雙臂交叉", "站姿", "倚牆", "坐姿", "行走"]
+values = ["回眸", "望向別處", "走向鏡頭", "三人合影"]
 
 [settings.STYLE]
 label = "疊影樣式"

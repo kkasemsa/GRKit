@@ -6,7 +6,7 @@ label = "Onion Skin Mode"
 
 [settings.POSE]
 label = "Pose"
-values = ["Head and Shoulders", "Three-Quarter Turn", "Hand to Chin", "Arms Crossed", "Standing", "Leaning on a Wall", "Seated", "Walking"]
+values = ["Over the Shoulder", "Looking Away", "Walking Toward Camera", "Group of Three"]
 
 [settings.STYLE]
 label = "Ghost Style"

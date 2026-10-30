@@ -1,5 +1,5 @@
 # Onion Skin: a faint picture over the live view to line up a shot: the last
-# shot, a held reference, or a built-in pose silhouette (poses.h, drawn by
+# shot, a held reference, or one of 4 built-in pose silhouettes (poses.h, drawn by
 # poses.py).
 id = "ONION"
 version = 1
@@ -21,10 +21,11 @@ values = 4
 saved = true
 public = true
 
-# The pose of Pose Guide, in the order of poses.h.
+# The pose of Pose Guide, in the order of poses.h: over the shoulder,
+# looking away, walking toward the camera, group of three.
 [[settings]]
 key = "POSE"
-values = 8
+values = 4
 saved = true
 
 # 0 Faint, 1 Strong, 2 Edges.
