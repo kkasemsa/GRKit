@@ -203,21 +203,21 @@ static void dust(const View *v, u32 strength)
     u32 rs = v->seed ^ 0xd0d0U, i;
     u32 scale = v->w / 300;                        /* 1 at 300 px wide, 20 at 6000 */
     if (!scale) scale = 1;
-    u32 n = (strength == 1 ? 40 : strength == 2 ? 110 : 260);
-    u32 hairs = strength == 1 ? 1 : strength == 2 ? 3 : 7;
+    u32 n = (strength == 1 ? 16 : strength == 2 ? 45 : 120);
+    u32 hairs = strength == 1 ? 1 : strength == 2 ? 2 : 4;
     for (i = 0; i < n; ++i) {
         int u = (int)rnd(&rs, v->w), w = (int)rnd(&rs, v->h);
         /* Mostly tiny specks; a few larger blots. Radius in 1/4 px. */
         u32 big = rnd(&rs, 10) == 0;
-        int r4 = (int)(scale * (big ? 6 + rnd(&rs, 10) : 2 + rnd(&rs, 5)));
+        int r4 = (int)(scale * (big ? 5 + rnd(&rs, 8) : 2 + rnd(&rs, 4)));
         u32 dark = rnd(&rs, 3) != 0;               /* two in three are dark */
-        u32 a = 70 + rnd(&rs, 150);                /* translucent, varied */
-        if (big) a = a / 2 + 20;
-        speck(v, u, w, r4, dark ? 24U : 236U, a);
+        u32 a = 25 + rnd(&rs, 60);                 /* faint, varied */
+        if (big) a = a / 2 + 10;
+        speck(v, u, w, r4, dark ? 40U : 225U, a);
     }
     for (i = 0; i < hairs; ++i) {
         int u = (int)rnd(&rs, v->w), w = (int)rnd(&rs, v->h);
-        hair(v, &rs, u, w, (int)(scale * (25 + rnd(&rs, 70))), 90 + rnd(&rs, 90), scale >= 6 ? 3 : scale >= 3 ? 2 : 1);
+        hair(v, &rs, u, w, (int)(scale * (25 + rnd(&rs, 70))), 35 + rnd(&rs, 45), scale >= 6 ? 3 : scale >= 3 ? 2 : 1);
     }
 }
 
@@ -277,14 +277,14 @@ static void leak(const View *v, u32 strength)
    along its length and it fades in and out. */
 static void scratches(const View *v, u32 strength)
 {
-    u32 rs = v->seed ^ 0x5c7aU, i, n = strength == 1 ? 2 : strength == 2 ? 4 : 8;
+    u32 rs = v->seed ^ 0x5c7aU, i, n = strength == 1 ? 1 : strength == 2 ? 2 : 4;
     const Plane *p = v->p;
     u32 W = p->right - p->left, H = p->bottom - p->top;
     u32 scale = W / 1500; if (!scale) scale = 1;
     for (i = 0; i < n; ++i) {
         u32 y0 = p->top + rnd(&rs, H), len = W / 5 + rnd(&rs, W - W / 5), x0 = p->left + rnd(&rs, W - len);
         u32 thick = 1 + rnd(&rs, scale), x;
-        u32 a0 = 60 + rnd(&rs, 110), wobble = 0, fade_in = len / 8 + 1, segment = 0;
+        u32 a0 = 30 + rnd(&rs, 50), wobble = 0, fade_in = len / 8 + 1, segment = 0;
         u32 bright = rnd(&rs, 5) != 0;             /* most scratches are pale, some dark */
         for (x = x0; x < x0 + len; ++x) {
             u32 t, a = a0, d = x - x0;
