@@ -1,0 +1,21 @@
+title = "오버레이"
+rows = ["꺼짐", "사용자 설정", "빛바램", "먼지", "빛샘", "만료 필름"]
+
+[settings.LOOK]
+label = "필름 효과"
+
+[settings.VIGNETTE]
+label = "비네팅"
+values = ["꺼짐", "약하게", "보통", "강하게"]
+
+[settings.DUST]
+label = "먼지"
+values = ["꺼짐", "약하게", "보통", "강하게"]
+
+[settings.LEAK]
+label = "빛샘"
+values = ["꺼짐", "약하게", "보통", "강하게"]
+
+[settings.SCRATCH]
+label = "스크래치"
+values = ["꺼짐", "약하게", "보통", "강하게"]

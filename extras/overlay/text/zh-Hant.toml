@@ -1,0 +1,21 @@
+title = "疊加"
+rows = ["關閉", "自訂", "暗角", "灰塵", "漏光", "過期底片"]
+
+[settings.LOOK]
+label = "底片效果"
+
+[settings.VIGNETTE]
+label = "暗角"
+values = ["關閉", "弱", "中", "強"]
+
+[settings.DUST]
+label = "灰塵"
+values = ["關閉", "弱", "中", "強"]
+
+[settings.LEAK]
+label = "漏光"
+values = ["關閉", "弱", "中", "強"]
+
+[settings.SCRATCH]
+label = "刮痕"
+values = ["關閉", "弱", "中", "強"]

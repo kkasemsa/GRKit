@@ -1,0 +1,21 @@
+title = "Overlay"
+rows = ["Off", "Custom", "Faded", "Dusty", "Leaky", "Expired"]
+
+[settings.LOOK]
+label = "Film Overlay"
+
+[settings.VIGNETTE]
+label = "Vignette"
+values = ["Off", "Light", "Medium", "Strong"]
+
+[settings.DUST]
+label = "Dust"
+values = ["Off", "Light", "Medium", "Strong"]
+
+[settings.LEAK]
+label = "Light Leak"
+values = ["Off", "Light", "Medium", "Strong"]
+
+[settings.SCRATCH]
+label = "Scratches"
+values = ["Off", "Light", "Medium", "Strong"]

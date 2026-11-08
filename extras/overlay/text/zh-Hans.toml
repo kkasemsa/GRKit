@@ -1,0 +1,21 @@
+title = "叠加"
+rows = ["关闭", "自定义", "暗角", "灰尘", "漏光", "过期胶片"]
+
+[settings.LOOK]
+label = "胶片效果"
+
+[settings.VIGNETTE]
+label = "暗角"
+values = ["关闭", "弱", "中", "强"]
+
+[settings.DUST]
+label = "灰尘"
+values = ["关闭", "弱", "中", "强"]
+
+[settings.LEAK]
+label = "漏光"
+values = ["关闭", "弱", "中", "强"]
+
+[settings.SCRATCH]
+label = "划痕"
+values = ["关闭", "弱", "中", "强"]

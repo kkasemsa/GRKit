@@ -1,0 +1,21 @@
+title = "オーバーレイ"
+rows = ["オフ", "カスタム", "周辺減光", "ホコリ", "光漏れ", "期限切れ"]
+
+[settings.LOOK]
+label = "フィルム効果"
+
+[settings.VIGNETTE]
+label = "周辺減光"
+values = ["オフ", "弱", "中", "強"]
+
+[settings.DUST]
+label = "ホコリ"
+values = ["オフ", "弱", "中", "強"]
+
+[settings.LEAK]
+label = "光漏れ"
+values = ["オフ", "弱", "中", "強"]
+
+[settings.SCRATCH]
+label = "キズ"
+values = ["オフ", "弱", "中", "強"]

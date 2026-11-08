@@ -1,0 +1,60 @@
+# Overlay: film artefacts drawn into each recorded picture: a vignette, dust
+# and hairs, a light leak, and scratches, each Off, Light, Medium, or Strong.
+# The dust, the leak, and the scratches fall differently on every shot. The
+# LOOK row chooses a preset or Custom, which uses the four rows. Off by
+# default.
+id = "OVERLAY"
+version = 1
+# The default place in ADJ and in MENU: after Recipe C (7), before Palette
+# Card (9), so that in the frame stage the overlay is drawn before the
+# swatches of Palette Card and leaves them clean.
+order = 8
+sources = ["overlay.c"]
+# Tile n shows LOOK n. Tile 0 is the module tile, for Off at the root.
+tiles = [
+    "tiles/0-module.png",
+    "tiles/1-custom.png",
+    "tiles/2-faded.png",
+    "tiles/3-dusty.png",
+    "tiles/4-leaky.png",
+    "tiles/5-expired.png",
+]
+
+# 0 Off, 1 Custom, 2 Faded, 3 Dusty, 4 Leaky, 5 Expired.
+[[settings]]
+key = "LOOK"
+values = 6
+saved = true
+public = true
+
+# Each: 0 Off, 1 Light, 2 Medium, 3 Strong. Used by Custom.
+[[settings]]
+key = "VIGNETTE"
+values = 4
+saved = true
+
+[[settings]]
+key = "DUST"
+values = 4
+saved = true
+
+[[settings]]
+key = "LEAK"
+values = 4
+saved = true
+
+[[settings]]
+key = "SCRATCH"
+values = 4
+saved = true
+
+[page]
+setting = "LOOK"
+off_row = true
+settings = ["LOOK", "VIGNETTE", "DUST", "LEAK", "SCRATCH"]
+
+# After the colour of the Film Look, before the marks such as the date.
+[[filters]]
+apply = "overlay_apply"
+setting = "LOOK"
+stage = "frame"

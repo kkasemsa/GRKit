@@ -3,8 +3,9 @@
 # cover the edge of the photo. Off by default.
 id = "PALETTE"
 version = 1
-# The default place in ADJ and in MENU: after Onion Skin (7).
-order = 8
+# The default place in ADJ and in MENU: after Overlay (8), whose filter
+# then runs first and leaves the swatches clean.
+order = 9
 sources = ["palette.c"]
 # Tile n shows layout n. Tile 0 is the module tile, for Off at the root.
 tiles = [
