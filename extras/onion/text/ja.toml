@@ -1,9 +1,0 @@
-title = "オニオンスキン"
-rows = ["オフ", "直前のショット", "参照を固定"]
-
-[settings.MODE]
-label = "表示モード"
-
-[settings.STYLE]
-label = "表示スタイル"
-values = ["薄く", "濃く", "輪郭"]

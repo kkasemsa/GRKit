@@ -1,9 +1,0 @@
-title = "参考叠影"
-rows = ["关闭", "上一张", "固定参考"]
-
-[settings.MODE]
-label = "叠影模式"
-
-[settings.STYLE]
-label = "叠影样式"
-values = ["淡", "浓", "轮廓"]
