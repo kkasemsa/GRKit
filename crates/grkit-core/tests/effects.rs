@@ -369,8 +369,10 @@ fn covers_without_a_number_show_a_large_name() {
 
 #[test]
 fn compiler_rejects_cover_icons_that_do_not_fit() {
-    let definition = read_json(root().join("portra-400-endura-v1/effect.json"));
-    let box_icon = definition["icon"].clone();
+    let mut definition = read_json(root().join("portra-400-endura-v1/effect.json"));
+    // The published definitions carry image icons; this checks the covers.
+    let box_icon = json!({"template": "box", "brand": "Kodak", "name": "PORTRA", "number": "400", "band": true});
+    definition["icon"] = box_icon.clone();
     for (key, value) in [
         ("name", json!("")),
         ("number", json!("1234567")),
@@ -499,6 +501,16 @@ fn published_cover_icons_show_the_words_of_the_effect_name() {
         let icon = &definition["icon"];
         let name = definition["name"].as_str().unwrap();
         assert!(icon.get("template").is_some(), "{name} has no cover icon");
+        // An image icon has pixels in place of words: a film canister, drawn by
+        // effects/sources/canister_icons.py. It needs no brand.
+        if icon["template"] == "image" {
+            assert_eq!(
+                effects::icon_pixels(icon).unwrap().len(),
+                40 * 40 * 4,
+                "{name}"
+            );
+            continue;
+        }
         // A cover without a number shows the name large, as Instax does.
         let (series, number) = (
             icon["name"].as_str().unwrap(),

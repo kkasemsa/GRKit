@@ -31,11 +31,13 @@ A monochrome effect cannot have `post_matrix`, `selective_color`, or `hue_sector
 | Label tile | `label` (1 to 4 capitals or digits) and `shape` (`film`, `filter`, or `plain`) |
 | Film box | `template: "box"`, `brand`, `name`, an optional `number`, and `band` |
 | Motion picture film label | `template: "cine"`, `brand`, `name`, and an optional `number` |
+| Image | `template: "image"` and `rgba`: 40 x 40 RGBA pixels, zlib-deflated and base64-encoded, drawn by any tool (`effects/sources/canister_icons.py` draws the film canisters) |
 
 - The icon shows the words of the effect name and the brand, in capitals. A cover without `number` shows the name large.
 - A motion picture film label shows the film number in place of the series name: Vision3 500T shows `5219` above `500T`. The target description must give that number.
 - Stock codes, papers, and process details go in the target description.
 - If a text does not fit, the compiler stops with an error.
+- An image icon is shown as its pixels everywhere, including the site, which draws the other forms with web fonts.
 
 ## Sources
 

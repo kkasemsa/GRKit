@@ -173,8 +173,60 @@ pub fn icon_pixels(icon: &Value) -> Result<Vec<u8>> {
             );
             crate::artwork::render_cine(text("brand")?, text("name")?, number()?)
         }
-        Some(_) => bail!("Expected icon template box or cine"),
+        Some("image") => {
+            ensure!(
+                has_keys(icon, &["template", "rgba"]),
+                "Expected image icon rgba"
+            );
+            image_pixels(text("rgba")?)
+        }
+        Some(_) => bail!("Expected icon template box, cine, or image"),
     }
+}
+
+/// The pixels of an `image` icon: 40 x 40 RGBA bytes, zlib-deflated and
+/// base64-encoded in `rgba`, drawn by any tool. Transparent pixels show the
+/// menu behind the icon, as the frame of the other templates does.
+fn image_pixels(rgba: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let deflated = base64_decode(rgba).context("Expected base64 in the image icon rgba")?;
+    let mut pixels = Vec::with_capacity(40 * 40 * 4);
+    flate2::read::ZlibDecoder::new(deflated.as_slice())
+        .read_to_end(&mut pixels)
+        .context("Expected zlib data in the image icon rgba")?;
+    ensure!(
+        pixels.len() == 40 * 40 * 4,
+        "Expected 40 x 40 RGBA pixels in the image icon, got {} bytes",
+        pixels.len()
+    );
+    Ok(pixels)
+}
+
+/// Standard base64 with `=` padding, whitespace allowed.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for c in text.bytes() {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 /// `required` keys, any of the `optional` keys, and nothing else.

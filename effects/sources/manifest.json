@@ -29,32 +29,35 @@
   },
   "upstream_changes": "CHANGELOG.txt",
   "files": {
-    "SPEKTRAFILM_LICENSE.txt": {
-      "sha256": "76d629501783ae52e8d63aee1e054c1e1a9713b9fe7d36fb306e25b1d14b24e9",
-      "license": "upstream-notice",
-      "upstream": "https://github.com/andreavolpato/spektrafilm/blob/3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt"
+    "CHANGELOG.txt": {
+      "sha256": "3e17db505201351b9a3f609024829990c3c5a2b5c7a74481212148bee209fb02",
+      "license": "upstream-changes"
     },
     "SPECTRAL_FILM_LUT_LICENSE.txt": {
       "sha256": "3cdc90b3e7727be6e5930102fadeaf35cf3d3bd7c492b90d6d16fb9ad8c3a1bd",
       "license": "upstream-notice",
       "upstream": "https://github.com/JanLohse/spectral_film_lut/blob/bcbcfc6861f49cc706dc5d00ea048e4853060aab/LICENSE"
     },
+    "SPEKTRAFILM_LICENSE.txt": {
+      "sha256": "76d629501783ae52e8d63aee1e054c1e1a9713b9fe7d36fb306e25b1d14b24e9",
+      "license": "upstream-notice",
+      "upstream": "https://github.com/andreavolpato/spektrafilm/blob/3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt"
+    },
     "T3MUJINPACK_LICENSE.txt": {
       "sha256": "b1a3f6e97b17b4532ff92c34d6db4b1ad8edd3317096389e7617234d8221a576",
       "license": "upstream-notice",
       "upstream": "https://github.com/t3mujin/t3mujinpack/blob/0b421f3e25209ed78253d1724a29cc6255c5e7fe/LICENSE.txt"
     },
-    "CHANGELOG.txt": {
-      "sha256": "3e17db505201351b9a3f609024829990c3c5a2b5c7a74481212148bee209fb02",
-      "license": "upstream-changes"
+    "bake_spectral_film_lut.py": {
+      "sha256": "f8ae8253b93778a31a32f07e67c524b7290f4534b8dfbed0fcb5532df52d6b53",
+      "license": "project"
     },
     "bake_spektrafilm.py": {
       "sha256": "3b0410210851f6098ada6af4aa2c3b279024a87b71c59a04e4e335e5048541ac",
       "license": "project"
     },
-    "bake_spectral_film_lut.py": {
-      "sha256": "f8ae8253b93778a31a32f07e67c524b7290f4534b8dfbed0fcb5532df52d6b53",
-      "license": "project"
+    "canister_icons.py": {
+      "sha256": "366881fa7c0d814ea50ad8be3d57146e3ef4a975d85daaf751618b187c68cf74"
     }
   },
   "luts": {
