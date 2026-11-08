@@ -107,7 +107,7 @@ int main(void)
     grkit_test_settings[SETTING_DUST] = 2;
     overlay_apply(&set, 1);
     changed(&set.planes[0], &diff, &brighter);
-    assert(diff > 50 && diff < MAIN_W * MAIN_H / 50 && brighter > 0 && brighter < diff);
+    assert(diff > 200 && diff < MAIN_W * MAIN_H / 30 && brighter > 0 && brighter < diff);
     grkit_test_settings[SETTING_DUST] = 0;
 
     /* Leak: brighter and warmer (Cr up) somewhere, over a wide area. */
@@ -143,17 +143,18 @@ int main(void)
         for (u32 x = 0; x < MAIN_W; x += 16) assert(cr_at(&set.planes[0], x, y) == 128);
     grkit_test_settings[SETTING_LEAK] = 0;
 
-    /* Scratches: pale lines along the sensor rows, in a portrait shot too. */
+    /* Scratches: thin lines along the sensor rows, mostly pale, in a
+       portrait shot too; a small part of the picture. */
     set = pictures();
     grkit_test_settings[SETTING_SCRATCH] = 3;
     overlay_apply(&set, 1);
     changed(&set.planes[0], &diff, &brighter);
-    assert(brighter == diff && diff > MAIN_W / 4);
+    assert(diff > MAIN_W / 4 && diff < MAIN_W * MAIN_H / 40 && brighter > diff / 3);
     set = pictures();
     set.turns = 1;
     overlay_apply(&set, 1);
     changed(&set.planes[0], &diff, &brighter);
-    assert(brighter == diff && diff > MAIN_W / 4);
+    assert(diff > MAIN_W / 4 && brighter > diff / 3);
     grkit_test_settings[SETTING_SCRATCH] = 0;
 
     /* Expired in a portrait shot: everything at once, no crash, corners dark. */

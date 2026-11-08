@@ -135,48 +135,89 @@ static void vignette(const View *v, u32 strength, u8 *scratch)
 
 /* ---- dust and hairs ---------------------------------------------------------- */
 
-/* A speck: a dark or pale disc of radius r at upright (u, w). */
-static void speck(const View *v, int u, int w, int r, int dy)
+/* Blend the sensor pixel's luma towards `target` by alpha a (0..256): the
+   scanner's dust is translucent, not ink. */
+static void blend_px(const View *v, int x, int y, u32 target, u32 a)
 {
-    int du, dw, x, y;
-    for (dw = -r; dw <= r; ++dw)
-        for (du = -r; du <= r; ++du)
-            if (du * du + dw * dw <= r * r) { sensor(v, u + du, w + dw, &x, &y); add_px(v, x, y, dy, 0, 0); }
+    const Plane *p = v->p;
+    u32 l;
+    if (x < (int)p->left || x >= (int)p->right || y < (int)p->top || y >= (int)p->bottom || !a) return;
+    l = p->y + (u32)y * p->pitch;
+    {
+        u32 yv = BYTE(l, x);
+        BYTE(l, x) = (u8)(yv + (((int)target - (int)yv) * (int)a >> 8));
+    }
 }
 
-/* A hair: a thin curved pale line from (u, w) of length n. */
-static void hair(const View *v, u32 *rs, int u, int w, int n, int dy)
+/* A speck: a soft disc of radius r (in 1/4 px) at upright (u, w), full
+   alpha a at the centre, fading to the edge. Dark specks are dust on the
+   negative; pale ones are dust on the print. */
+static void speck(const View *v, int u, int w, int r4, u32 target, u32 a)
+{
+    int r = (r4 + 3) / 4, du, dw, x, y;
+    if (r < 1) r = 1;
+    for (dw = -r; dw <= r; ++dw)
+        for (du = -r; du <= r; ++du) {
+            int d2 = du * du * 16 + dw * dw * 16;      /* in 1/16 px^2 */
+            int r2 = r4 * r4;
+            u32 f;
+            if (d2 >= r2) continue;
+            f = 256U - (u32)divide((u32)d2 * 256U, (u32)r2);   /* 256 at the centre, 0 at the edge */
+            f = (f * f) >> 8;                              /* a soft shoulder */
+            sensor(v, u + du, w + dw, &x, &y);
+            blend_px(v, x, y, target, (a * f) >> 8);
+        }
+}
+
+/* A hair: a thin curved fibre of length n from (u, w), pale, faint, with a
+   slightly darker core, as a fibre on a scanner's glass. */
+static void hair(const View *v, u32 *rs, int u, int w, int n, u32 a, int thick)
 {
     int i, x, y, ddu = (int)rnd(rs, 3) - 1, ddw = (int)rnd(rs, 3) - 1;
     int fu = u * 16, fw = w * 16, vu = (int)rnd(rs, 33) - 16, vw = (int)rnd(rs, 33) - 16;
+    if (vu == 0 && vw == 0) vu = 11;
     for (i = 0; i < n; ++i) {
+        int t;
         fu += vu; fw += vw;
-        vu += ddu; vw += ddw;
+        if ((i & 15) == 0) { vu += ddu; vw += ddw; if (rnd(rs, 4) == 0) { ddu = (int)rnd(rs, 3) - 1; ddw = (int)rnd(rs, 3) - 1; } }
         if (vu > 16) vu = 16;
         if (vu < -16) vu = -16;
         if (vw > 16) vw = 16;
         if (vw < -16) vw = -16;
-        sensor(v, fu / 16, fw / 16, &x, &y); add_px(v, x, y, dy, 0, 0);
+        /* The alpha wanders along the fibre: a hair is never one even line. */
+        {
+            u32 ai = (a * (160U + ((u32)(i * 7) & 95U))) >> 8;
+            for (t = 0; t < thick; ++t) {
+                /* perpendicular offset: thicker fibres are a few pixels wide, fainter at the sides */
+                int side = t - thick / 2, px = fu / 16 + (vw > 0 ? side : -side) * (vw != 0), py = fw / 16 + (vu != 0 ? side : 0);
+                u32 as = side == 0 ? ai : ai / 2;
+                sensor(v, px, py, &x, &y);
+                blend_px(v, x, y, 235, as);
+            }
+        }
     }
 }
 
 static void dust(const View *v, u32 strength)
 {
     u32 rs = v->seed ^ 0xd0d0U, i;
-    u32 scale = v->w / 240;                        /* 1 at 240 px wide, 25 at 6000 */
+    u32 scale = v->w / 300;                        /* 1 at 300 px wide, 20 at 6000 */
     if (!scale) scale = 1;
-    u32 n = (strength == 1 ? 14 : strength == 2 ? 36 : 80);
-    u32 hairs = strength == 1 ? 1 : strength == 2 ? 3 : 6;
+    u32 n = (strength == 1 ? 40 : strength == 2 ? 110 : 260);
+    u32 hairs = strength == 1 ? 1 : strength == 2 ? 3 : 7;
     for (i = 0; i < n; ++i) {
         int u = (int)rnd(&rs, v->w), w = (int)rnd(&rs, v->h);
-        int r = (int)(scale * (1 + rnd(&rs, 3))) / 2;
-        int dark = rnd(&rs, 4) != 0;               /* mostly dark specks, some pale */
-        speck(v, u, w, r < 1 ? 1 : r, dark ? -(90 + (int)rnd(&rs, 60)) : 70 + (int)rnd(&rs, 60));
+        /* Mostly tiny specks; a few larger blots. Radius in 1/4 px. */
+        u32 big = rnd(&rs, 10) == 0;
+        int r4 = (int)(scale * (big ? 6 + rnd(&rs, 10) : 2 + rnd(&rs, 5)));
+        u32 dark = rnd(&rs, 3) != 0;               /* two in three are dark */
+        u32 a = 70 + rnd(&rs, 150);                /* translucent, varied */
+        if (big) a = a / 2 + 20;
+        speck(v, u, w, r4, dark ? 24U : 236U, a);
     }
     for (i = 0; i < hairs; ++i) {
         int u = (int)rnd(&rs, v->w), w = (int)rnd(&rs, v->h);
-        hair(v, &rs, u, w, (int)(scale * (20 + rnd(&rs, 60))), 90 + (int)rnd(&rs, 60));
-        if (scale > 2) hair(v, &rs, u + 1, w, (int)(scale * 30), 60);
+        hair(v, &rs, u, w, (int)(scale * (25 + rnd(&rs, 70))), 90 + rnd(&rs, 90), scale >= 6 ? 3 : scale >= 3 ? 2 : 1);
     }
 }
 
@@ -231,28 +272,32 @@ static void leak(const View *v, u32 strength)
 
 /* ---- scratches ----------------------------------------------------------------- */
 
-/* Thin pale lines along the long side of the film, which is the upright
-   width in a landscape shot and the height in a portrait shot: along the
-   sensor's x axis either way. */
+/* Thin pale lines along the long side of the film, which is the sensor's x
+   axis in either posture. A scratch is faint and uneven: its alpha wanders
+   along its length and it fades in and out. */
 static void scratches(const View *v, u32 strength)
 {
-    u32 rs = v->seed ^ 0x5c7aU, i, n = strength == 1 ? 1 : strength == 2 ? 3 : 6;
+    u32 rs = v->seed ^ 0x5c7aU, i, n = strength == 1 ? 2 : strength == 2 ? 4 : 8;
     const Plane *p = v->p;
     u32 W = p->right - p->left, H = p->bottom - p->top;
     u32 scale = W / 1500; if (!scale) scale = 1;
     for (i = 0; i < n; ++i) {
-        u32 y0 = p->top + rnd(&rs, H), len = W / 4 + rnd(&rs, W - W / 4), x0 = p->left + rnd(&rs, W - len);
+        u32 y0 = p->top + rnd(&rs, H), len = W / 5 + rnd(&rs, W - W / 5), x0 = p->left + rnd(&rs, W - len);
         u32 thick = 1 + rnd(&rs, scale), x;
-        int dy = 50 + (int)rnd(&rs, 70);
-        u32 wobble = 0;
+        u32 a0 = 60 + rnd(&rs, 110), wobble = 0, fade_in = len / 8 + 1, segment = 0;
+        u32 bright = rnd(&rs, 5) != 0;             /* most scratches are pale, some dark */
         for (x = x0; x < x0 + len; ++x) {
-            u32 t;
-            if ((x & 63) == 0) wobble = rnd(&rs, 3);
+            u32 t, a = a0, d = x - x0;
+            if ((x & 63) == 0) { wobble = rnd(&rs, 3); segment = rnd(&rs, 4); }
+            if (d < fade_in) a = divide(a * d, fade_in);
+            if (len - d < fade_in) a = divide(a * (len - d), fade_in);
+            if (segment == 0) a = a / 3;           /* a faint stretch */
             for (t = 0; t < thick; ++t) {
                 int yy = (int)(y0 + t + wobble) - 1;
+                u32 at = thick > 1 && (t == 0 || t == thick - 1) ? a / 2 : a;
                 if (yy >= (int)p->top && yy < (int)p->bottom) {
-                    u32 l = p->y + (u32)yy * p->pitch;
-                    BYTE(l, x) = (u8)clamp8((int)BYTE(l, x) + dy);
+                    u32 l = p->y + (u32)yy * p->pitch, yv = BYTE(l, x), target = bright ? 240U : 30U;
+                    BYTE(l, x) = (u8)(yv + (((int)target - (int)yv) * (int)at >> 8));
                 }
             }
         }
