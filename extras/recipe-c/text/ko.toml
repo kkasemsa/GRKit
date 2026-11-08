@@ -1,0 +1,13 @@
+title = "레시피 C"
+rows = ["꺼짐", "Portra 800 +2", "Ektachrome E100", "Vision3 250D", "Double-X 5222", "Astia 100F", "Instax"]
+
+[settings.PICK]
+label = "레시피"
+
+[settings.RESET]
+label = "레시피 초기화"
+values = ["유지", "초기화"]
+
+[settings.NAME]
+label = "레시피 이름"
+values = ["표시", "숨김"]

@@ -26,7 +26,6 @@ from spectral_film_lut.wratten_filters import WRATTEN
 # Wratten filter or None)
 RECIPES = {
     "trix-400-mono-v1": ("Kodak Tri-X 400", "Kodak Polymax Fine-Art Paper Grade 2", 0, None),
-    "red-filter-mono-v1": ("Kodak Tri-X 400", "Kodak Polymax Fine-Art Paper Grade 2", 0, "25"),
     "eterna-500t-3523xd-v1": ("Fuji Eterna 500", "Fuji Eterna-CP 3523XD", 0, None),
     "instax-v1": ("Fuji Instax color", None, 1, None),
     "double-x-5222-mono-v1": ("Kodak 5222 Dev 12", "Kodak Polymax Fine-Art Paper Grade 3", 0, None),

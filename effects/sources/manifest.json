@@ -45,7 +45,7 @@
       "upstream": "https://github.com/t3mujin/t3mujinpack/blob/0b421f3e25209ed78253d1724a29cc6255c5e7fe/LICENSE.txt"
     },
     "CHANGELOG.txt": {
-      "sha256": "2a54db31e93dc231f96c8286c0fd6d6e3906c30018508bb5bbf9f6fa3ff99e55",
+      "sha256": "3e17db505201351b9a3f609024829990c3c5a2b5c7a74481212148bee209fb02",
       "license": "upstream-changes"
     },
     "bake_spektrafilm.py": {
@@ -53,11 +53,16 @@
       "license": "project"
     },
     "bake_spectral_film_lut.py": {
-      "sha256": "f184f6cb98c43037916ca6a4a76706791ad33e76178e4664496db8f26e7c7b60",
+      "sha256": "f8ae8253b93778a31a32f07e67c524b7290f4534b8dfbed0fcb5532df52d6b53",
       "license": "project"
     }
   },
   "luts": {
+    "astia-100f-v1.png": {
+      "generator": "t3mujinpack",
+      "sha256": "6c32ca40f5411fa0f7d407139136869d84ebfb3a75c0529c2fa7e1207f4906e0",
+      "upstream": "haldcluts/t3mujinpack - Color Slide - Fuji Astia 100F.png"
+    },
     "c200-crystal-v1.cube": {
       "generator": "spektrafilm",
       "sha256": "d8568a0e93b38c54691e6ff35682f4a591660d7e40513376112fe1be867c6d03"
@@ -110,10 +115,6 @@
     "provia-100f-v1.cube": {
       "generator": "spektrafilm",
       "sha256": "e0fa266bdca080f40d1c01a37a6c3e81b791c0b33aaac53741a103bc4c9d1119"
-    },
-    "red-filter-mono-v1.cube": {
-      "generator": "spectral_film_lut",
-      "sha256": "fb92f310bd4695e53f4c615bf37da594b6f47fdea54db7bee638b945981733af"
     },
     "trix-400-mono-v1.cube": {
       "generator": "spectral_film_lut",

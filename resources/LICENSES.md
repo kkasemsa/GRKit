@@ -28,15 +28,15 @@ These effects are licensed under the [Creative Commons Attribution-ShareAlike 4.
 
 ### Spectral Film LUT
 
-Tri-X 400, Tri-X 400 Red, Eterna 500T, Instax, and Double-X 5222 derive from LUTs of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse.
+Tri-X 400, Eterna 500T, Instax, and Double-X 5222 derive from LUTs of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse.
 
 These effects are licensed under the MIT License. The copyright and permission notice is in "Spectral Film LUT license" below.
 
 ### t3mujinpack
 
-HP5 Plus 400 derives from a HaldCLUT of [t3mujinpack](https://github.com/t3mujin/t3mujinpack) by João Almeida, a set of darktable film styles.
+HP5 Plus 400 and Astia 100F derive from HaldCLUTs of [t3mujinpack](https://github.com/t3mujin/t3mujinpack) by João Almeida, a set of darktable film styles.
 
-This effect is licensed under the MIT License. The copyright and permission notice is in "t3mujinpack license" below.
+These effects are licensed under the MIT License. The copyright and permission notice is in "t3mujinpack license" below.
 
 ### Names
 

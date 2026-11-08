@@ -20,7 +20,7 @@ levels of Vision3 500T, and fits each LUT to the effect model.
 
 ## Spectral Film LUT
 
-Tri-X 400, Tri-X 400 Red, Eterna 500T, Instax, and Double-X 5222 derive from LUTs
+Tri-X 400, Eterna 500T, Instax, and Double-X 5222 derive from LUTs
 of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse, licensed under
 the MIT License. `sources/SPECTRAL_FILM_LUT_LICENSE.txt` contains its copyright and permission
 notice. These effect definitions are also licensed under the MIT License. Tri-X 400 Red applies
@@ -28,9 +28,9 @@ the library's Kodak Wratten 25 data to Tri-X 400.
 
 ## t3mujinpack
 
-HP5 Plus 400 derives from a HaldCLUT of the darktable styles of
+HP5 Plus 400 and Astia 100F derive from HaldCLUTs of the darktable styles of
 [t3mujinpack](https://github.com/t3mujin/t3mujinpack) by João Almeida, licensed under the MIT
-License. `sources/T3MUJINPACK_LICENSE.txt` contains its notice. This effect definition is also
+License. `sources/T3MUJINPACK_LICENSE.txt` contains its notice. These effect definitions are also
 licensed under the MIT License.
 
 ## Names and limits

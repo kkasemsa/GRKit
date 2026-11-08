@@ -70,7 +70,7 @@ fn source_count() -> usize {
 
 fn write_definition(root: &Path, id: &str) {
     let mut definition: Value =
-        serde_json::from_slice(&fs::read(source().join("red-filter-mono-v1/effect.json")).unwrap())
+        serde_json::from_slice(&fs::read(source().join("trix-400-mono-v1/effect.json")).unwrap())
             .unwrap();
     definition["effect_id"] = json!(id);
     let directory = root.join(id);
@@ -240,10 +240,10 @@ fn compiled_directory_extras_and_changed_runtime_bytes_are_rejected() {
 fn symlink_definitions_and_compiled_effects_are_rejected() {
     use std::os::unix::fs::symlink;
     let tmp = tempfile::tempdir().unwrap();
-    let input = tmp.path().join("input/red-filter-mono-v1");
+    let input = tmp.path().join("input/trix-400-mono-v1");
     fs::create_dir_all(&input).unwrap();
     symlink(
-        source().join("red-filter-mono-v1/effect.json"),
+        source().join("trix-400-mono-v1/effect.json"),
         input.join("effect.json"),
     )
     .unwrap();

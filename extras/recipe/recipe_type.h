@@ -1,4 +1,4 @@
-/* The recipe of the Recipe menus (extras/recipe, extras/recipe-b). grain,
+/* The recipe of the Recipe menus (extras/recipe, recipe-b, recipe-c). grain,
    size, and aspect are values of CORE.GRAIN, CORE.GRAIN_SIZE, and
    CORE.ASPECT; RECIPE_NO_ASPECT leaves the aspect as it is. label is the
    viewfinder text: capitals, digits, space, '-', '+', '.'. */

@@ -1,6 +1,6 @@
 /* Recipe A: a short menu of film recipes. A recipe is a Film Look, named by
    its stable effect ID, with a grain strength, a grain size, and an optional
-   aspect. Choosing a recipe applies it at once and sets Recipe B to Off;
+   aspect. Choosing a recipe applies it at once and sets Recipe B and C to Off;
    Reset applies it again after experimenting. The viewfinder shows the name
    of the active recipe, with a mark when a setting differs from it. The
    recipes are data of the camera family (recipes/<family>.toml, menu "a",
@@ -10,4 +10,5 @@
 #include "recipe_type.h"
 #include "recipes.h"
 #define USED_OTHER_PICK USED_RECIPEB_PICK
+#define USED_OTHER_PICK2 USED_RECIPEC_PICK
 #include "recipe_impl.h"

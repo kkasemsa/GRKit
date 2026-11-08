@@ -106,7 +106,7 @@ fn standard_preview_returns_each_input() {
 #[test]
 fn effect_previews_follow_the_effect() {
     let base = synthetic_base();
-    let mono = site::preview_lut(&base, &decoded(&definition("red-filter-mono-v1"))).unwrap();
+    let mono = site::preview_lut(&base, &decoded(&definition("trix-400-mono-v1"))).unwrap();
     assert!(mono
         .chunks_exact(3)
         .all(|rgb| rgb[0] == rgb[1] && rgb[1] == rgb[2]));
@@ -173,7 +173,7 @@ fn raw_standard_baseline_does_not_clip_through_effect_curves() {
 
 #[test]
 fn published_effects_match_their_definitions() {
-    let ids = ["ektar-100-edge-v1", "red-filter-mono-v1"];
+    let ids = ["ektar-100-edge-v1", "trix-400-mono-v1"];
     let definitions: Vec<Value> = ids.iter().map(|id| definition(id)).collect();
     let files = site::publish_effects(&definitions, &synthetic_base(), "gr3-2.10").unwrap();
     let catalog = effects::parse_json(&files["catalog.json"]).unwrap();

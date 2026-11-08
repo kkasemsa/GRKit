@@ -8,10 +8,10 @@
 # never by its place in CORE.TONE, which can change at each start. A module
 # finds the value with effect_find (docs/module-reference.md).
 #
-# Recipe has two menus of at most 7 recipes each, a menu field per pack:
-# "a" (colour negative, extras/recipe) and "b" (black-and-white, slide, and
-# cinema, extras/recipe-b). Choosing a recipe in one menu sets the other to
-# Off.
+# Recipe has three menus of at most 7 recipes each, a menu field per pack:
+# "a" (colour negative, extras/recipe), "b" (black-and-white, slide, and
+# cinema, extras/recipe-b), and "c" (the rest, extras/recipe-c). Choosing a
+# recipe in one menu sets the others to Off.
 #
 # Both files list the same packs, in the same order, with the same effect,
 # name, white balance, and aspect. Only grain differs: at the same setting,
@@ -35,7 +35,7 @@
 # grain_size:     auto, small, medium, large                 (CORE.GRAIN_SIZE)
 # aspect:         native, xpan, 16:9, 4:3, 2.35:1, 1:1, 5:4, 7:6, or absent
 #                 to leave the aspect as it is              (CORE.ASPECT)
-# menu:           a or b
+# menu:           a, b, or c
 # white_balance:  a suggestion that the photographer sets by hand, with the
 #                 white balance shift at 0 / 0. Recipes do not set white
 #                 balance yet.
@@ -95,6 +95,26 @@ white_balance = "daylight"
 status = "untested"
 
 [[pack]]
+id = "superia-400"
+name = "Superia 400"
+menu = "a"
+effect = "xtra-400-crystal-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "pro-400h"
+name = "Pro 400H"
+menu = "a"
+effect = "pro-400h-crystal-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
 id = "hp5-400"
 name = "HP5 Plus 400"
 menu = "b"
@@ -131,5 +151,95 @@ menu = "b"
 effect = "eterna-500t-3523xd-v1"
 grain = "medium"
 grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "kodachrome-64"
+name = "Kodachrome 64"
+menu = "b"
+effect = "kodachrome-64-v1"
+grain = "weak"
+grain_size = "small"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "velvia-100"
+name = "Velvia 100"
+menu = "b"
+effect = "velvia-100-v1"
+grain = "weak"
+grain_size = "small"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "vision3-500t"
+name = "Vision3 500T"
+menu = "b"
+effect = "vision3-500t-supra-v1"
+grain = "medium"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "portra-800"
+name = "Portra 800 +2"
+menu = "c"
+effect = "portra-800-push2-v1"
+grain = "strong"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "ektachrome-e100"
+name = "Ektachrome E100"
+menu = "c"
+effect = "ektachrome-e100-v1"
+grain = "weak"
+grain_size = "small"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "vision3-250d"
+name = "Vision3 250D"
+menu = "c"
+effect = "vision3-250d-2383-v1"
+grain = "weak"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "double-x-5222"
+name = "Double-X 5222"
+menu = "c"
+effect = "double-x-5222-mono-v1"
+grain = "strong"
+grain_size = "auto"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "astia-100f"
+name = "Astia 100F"
+menu = "c"
+effect = "astia-100f-v1"
+grain = "weak"
+grain_size = "small"
+white_balance = "daylight"
+status = "untested"
+
+[[pack]]
+id = "instax"
+name = "Instax"
+menu = "c"
+effect = "instax-v1"
+grain = "weak"
+grain_size = "large"
 white_balance = "daylight"
 status = "untested"

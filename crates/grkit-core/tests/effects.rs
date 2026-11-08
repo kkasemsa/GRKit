@@ -284,7 +284,7 @@ fn knots_validate_and_round_ties_even() {
 
 #[test]
 fn compiler_rejects_ambiguous_definitions_and_invalid_artwork() {
-    let mut definition = read_json(root().join("red-filter-mono-v1/effect.json"));
+    let mut definition = read_json(root().join("trix-400-mono-v1/effect.json"));
     definition["curves"] = json!([]);
     definition["curve_knots"] = json!(vec![[[0, 0], [255, 16320]]; 3]);
     assert!(effects::compile_definition(&definition).is_err());
@@ -467,7 +467,7 @@ fn selective_color_rejects_invalid_parameters() {
         assert!(effects::compile_definition(&definition).is_err(), "{value}");
     }
     // Selective color needs the chroma that a monochrome effect removes.
-    let mut mono = read_json(root().join("red-filter-mono-v1/effect.json"));
+    let mut mono = read_json(root().join("trix-400-mono-v1/effect.json"));
     mono["selective_color"] = base["selective_color"].clone();
     let error = effects::compile_definition(&mono).unwrap_err().to_string();
     assert!(error.contains("selective"), "{error}");

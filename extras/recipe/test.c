@@ -15,6 +15,8 @@ u32 recipe_state(u32 index);
 #define GOLD 3U
 #define ULTRAMAX 4U
 #define C200 5U
+#define SUPERIA 6U
+#define PRO400H 7U
 
 static void choose(u32 pick)
 {
@@ -41,12 +43,12 @@ int main(void)
     static const u16 full[4] = {0, 0, 720, 480};
     Surface s = grkit_test_surface(full);
 
-    /* The descriptor: PICK, RESET, and NAME; five used settings, the last
-       the PICK of Recipe B; a page, an event subscriber, and a layer; Off and
+    /* The descriptor: PICK, RESET, and NAME; six used settings, the last two
+       the PICKs of Recipe B and C; a page, an event subscriber, and a layer; Off and
        a tile for each recipe. */
-    assert(grkit_module.setting_count == 3 && grkit_module.use_count == 5);
+    assert(grkit_module.setting_count == 3 && grkit_module.use_count == 6);
     assert(grkit_module.registration_count == 3);
-    assert(grkit_module.settings[0].values == C200 + 1);
+    assert(grkit_module.settings[0].values == PRO400H + 1);
     assert(grkit_module.tile_count == grkit_module.settings[0].values);
 
     /* The installed effects, in an order other than that of the recipes:
@@ -88,9 +90,10 @@ int main(void)
         assert(grkit_test_settings[USED_RECIPEB_PICK] == 2);
     }
 
-    /* A recipe that applies sets Recipe B to Off. */
+    /* A recipe that applies sets Recipe B and C to Off. */
+    grkit_test_settings[USED_RECIPEC_PICK] = 4;
     choose(PORTRA);
-    assert(grkit_test_settings[USED_RECIPEB_PICK] == 0);
+    assert(grkit_test_settings[USED_RECIPEB_PICK] == 0 && grkit_test_settings[USED_RECIPEC_PICK] == 0);
 
     /* Off applies nothing. */
     choose(PORTRA);

@@ -1,6 +1,6 @@
 # Recipe B: the second menu of film recipes, the black-and-white, slide, and
 # cinema stocks, with the code of Recipe A (extras/recipe/recipe_impl.h).
-# Choosing a recipe in either menu sets the other to Off. The recipes are
+# Choosing a recipe in any menu sets the others to Off. The recipes are
 # data of the camera family: menu "b" of recipes/<family>.toml, generated
 # into recipes-<family>.h. recipes.h selects the family;
 # scripts/recipe-module.sh builds the module of a family.
@@ -16,13 +16,16 @@ tiles = [
     "tiles/2-trix-400.png",
     "tiles/3-provia-100f.png",
     "tiles/4-eterna-500t.png",
+    "tiles/5-kodachrome-64.png",
+    "tiles/6-velvia-100.png",
+    "tiles/7-vision3-500t.png",
 ]
-uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT", "?RECIPE.PICK"]
+uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT", "?RECIPE.PICK", "?RECIPEC.PICK"]
 
 # 0 Off, then recipe n - 1 of recipes.h.
 [[settings]]
 key = "PICK"
-values = 5
+values = 8
 saved = true
 public = true
 

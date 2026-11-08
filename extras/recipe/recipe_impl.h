@@ -1,7 +1,7 @@
-/* The code of the Recipe menus, shared by extras/recipe (Recipe A) and
-   extras/recipe-b (Recipe B). The recipe.c of a menu includes it after
-   recipe_type.h and its recipes.h, and defines USED_OTHER_PICK, the PICK of
-   the other menu. */
+/* The code of the Recipe menus, shared by extras/recipe (Recipe A),
+   extras/recipe-b (Recipe B), and extras/recipe-c (Recipe C). The recipe.c
+   of a menu includes it after recipe_type.h and its recipes.h, and defines
+   USED_OTHER_PICK and USED_OTHER_PICK2, the PICKs of the other two menus. */
 /* ---- applying a recipe ---------------------------------------------------- */
 
 /* The text of a recipe whose Film Look is not installed, in the menu
@@ -25,8 +25,9 @@ static void apply(u32 index)
         return;
     }
     setting_set(USED_CORE_TONE, tone);
-    /* One recipe at a time: the other menu goes to Off. */
+    /* One recipe at a time: the other menus go to Off. */
     if (USED_OTHER_PICK != GRKIT_NO_SETTING) setting_set(USED_OTHER_PICK, 0);
+    if (USED_OTHER_PICK2 != GRKIT_NO_SETTING) setting_set(USED_OTHER_PICK2, 0);
     setting_set(USED_CORE_GRAIN, r->grain);
     setting_set(USED_CORE_GRAIN_SIZE, r->size);
     if (r->aspect != RECIPE_NO_ASPECT) setting_set(USED_CORE_ASPECT, r->aspect);

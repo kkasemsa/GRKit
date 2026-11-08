@@ -15,7 +15,11 @@ const SHARED: [&str; 6] = ["id", "name", "menu", "effect", "white_balance", "asp
 /// The Recipe menus: the menu field and the module folder of each. A menu
 /// has at most 7 recipes, as PICK, with Off, is a native settings row of at
 /// most 8 values.
-const MENUS: [(&str, &str); 2] = [("a", "extras/recipe"), ("b", "extras/recipe-b")];
+const MENUS: [(&str, &str); 3] = [
+    ("a", "extras/recipe"),
+    ("b", "extras/recipe-b"),
+    ("c", "extras/recipe-c"),
+];
 const MENU_RECIPES: usize = 7;
 
 fn root() -> PathBuf {
