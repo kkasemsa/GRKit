@@ -1,29 +1,26 @@
 #!/bin/sh
-# Builds a Recipe module of one camera family: gr3 (GR III, GR IIIx) or gr4
-# (GR IV), and one menu: a (Recipe A, extras/recipe, RECIPE.GRM), b
-# (Recipe B, extras/recipe-b, RECIPEB.GRM), or c (Recipe C, extras/recipe-c,
-# RECIPEC.GRM). A module is the same for each
-# family but its recipes (menu a, b, or c of recipes/<family>.toml, generated
-# into recipes-<family>.h of the module folder).
+# Builds a Film page module of one camera family: gr3 (GR III, GR IIIx) or
+# gr4 (GR IV), and one page: neg (Negative, NEGATIVE.GRM), slide (Slide,
+# SLIDE.GRM), or cine (Cine / B&W, CINEBW.GRM), from extras/film/<page>. A
+# module is the same for each family but its recipes (the groups of the page
+# in recipes/<family>.toml, generated into recipes-<family>.h of the page).
 #
-#     sh scripts/recipe-module.sh gr3 a build/gr3/RECIPE.GRM [grkit module build options]
-#     sh scripts/recipe-module.sh gr3 b build/gr3/RECIPEB.GRM
+#     sh scripts/recipe-module.sh gr3 neg build/gr3/NEGATIVE.GRM [grkit module build options]
 set -eu
 cd "$(dirname "$0")/.."
-usage() { echo "usage: $0 gr3|gr4 a|b|c OUT.GRM [options]" >&2; exit 2; }
+usage() { echo "usage: $0 gr3|gr4 neg|slide|cine OUT.GRM [options]" >&2; exit 2; }
 family=${1:-}
-menu=${2:-}
+page=${2:-}
 out=${3:-}
 case "$family" in gr3 | gr4) ;; *) usage ;; esac
-case "$menu" in a) folder=recipe ;; b) folder=recipe-b ;; c) folder=recipe-c ;; *) usage ;; esac
+case "$page" in neg | slide | cine) ;; *) usage ;; esac
 [ -n "$out" ] || usage
 shift 3
-[ -f "extras/$folder/recipes-$family.h" ] || { echo "no extras/$folder/recipes-$family.h" >&2; exit 1; }
+[ -f "extras/film/$page/recipes-$family.h" ] || { echo "no extras/film/$page/recipes-$family.h" >&2; exit 1; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-# Recipe B and C include the code of Recipe A from ../recipe.
-cp -R extras/recipe "$work/recipe"
-[ "$folder" = recipe ] || cp -R "extras/$folder" "$work/$folder"
-printf '#include "recipes-%s.h"\n' "$family" > "$work/$folder/recipes.h"
+# A page includes the shared code from ../.
+cp -R extras/film "$work/film"
+printf '#include "recipes-%s.h"\n' "$family" > "$work/film/$page/recipes.h"
 mkdir -p "$(dirname "$out")"
-grkit module build --dir "$work/$folder" --out "$out" "$@"
+grkit module build --dir "$work/film/$page" --out "$out" "$@"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Draws the film canister icons of the effects and writes them into each
 effect.json as an `image` icon (effects/README.md, Icons). The Recipe
-modules (extras/recipe*) use the same canisters as their tiles:
-scripts/recipe-tiles.py draws them from STOCKS.
+pages (extras/film/*) use the same canisters as their tiles:
+scripts/film-pages.py draws them from STOCKS.
 
 Each canister is a generic 35 mm cassette: metal caps, a coloured body, a
 coloured band with one letter, and the felt lip. The colours and the letter

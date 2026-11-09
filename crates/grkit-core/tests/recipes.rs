@@ -11,16 +11,19 @@ const ASPECTS: [&str; 8] = [
 ];
 const STATUSES: [&str; 4] = ["tested", "grain-unverified", "untested", "needs-effect"];
 /// The fields that must be equal in each family: the look itself.
-const SHARED: [&str; 6] = ["id", "name", "menu", "effect", "white_balance", "aspect"];
-/// The Recipe menus: the menu field and the module folder of each. A menu
-/// has at most 7 recipes, as PICK, with Off, is a native settings row of at
-/// most 8 values.
-const MENUS: [(&str, &str); 3] = [
-    ("a", "extras/recipe"),
-    ("b", "extras/recipe-b"),
-    ("c", "extras/recipe-c"),
+const SHARED: [&str; 6] = ["id", "name", "group", "effect", "white_balance", "aspect"];
+/// The recipe groups, in file order.
+const GROUPS: [&str; 5] = ["negative", "slide", "cine", "bw", "instant"];
+/// The Film pages: the folder under extras/film and the groups of each, as
+/// scripts/film-pages.py has them. A page has at most 8 recipes: its tiles,
+/// 6400 bytes each, share the 64 KB code segment of the module.
+const PAGES: [(&str, &[&str]); 3] = [
+    ("neg", &["negative"]),
+    ("slide", &["slide", "instant"]),
+    ("cine", &["cine", "bw"]),
 ];
-const MENU_RECIPES: usize = 7;
+const PAGE_RECIPES: usize = 8;
+const LANGUAGES: [&str; 5] = ["en", "zh-Hans", "zh-Hant", "ja", "ko"];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -57,7 +60,7 @@ fn each_pack_is_valid() {
         "grain",
         "grain_size",
         "aspect",
-        "menu",
+        "group",
         "white_balance",
         "status",
     ];
@@ -87,11 +90,8 @@ fn each_pack_is_valid() {
             if let Some(aspect) = text(pack, "aspect") {
                 assert!(ASPECTS.contains(&aspect), "{family} {id}: aspect {aspect}");
             }
-            let menu = text(pack, "menu").expect("menu");
-            assert!(
-                MENUS.iter().any(|(m, _)| *m == menu),
-                "{family} {id}: menu {menu}"
-            );
+            let group = text(pack, "group").expect("group");
+            assert!(GROUPS.contains(&group), "{family} {id}: group {group}");
             let status = text(pack, "status").expect("status");
             assert!(STATUSES.contains(&status), "{family} {id}: status {status}");
             let effect = text(pack, "effect").expect("effect");
@@ -112,6 +112,40 @@ fn each_pack_is_valid() {
                 );
             }
         }
+    }
+}
+
+/// The file lists the groups in GROUPS order, each in one run, so that a
+/// page of two groups shows them one after the other.
+#[test]
+fn the_groups_are_in_file_order() {
+    for family in FAMILIES {
+        let mut last = 0;
+        for pack in packs(family) {
+            let group = text(&pack, "group").unwrap();
+            let at = GROUPS.iter().position(|g| *g == group).unwrap();
+            assert!(
+                at >= last,
+                "{family} {}: group {group} out of order",
+                text(&pack, "id").unwrap()
+            );
+            last = at;
+        }
+    }
+}
+
+/// Each group is on one page.
+#[test]
+fn each_group_has_a_page() {
+    for group in GROUPS {
+        assert_eq!(
+            PAGES
+                .iter()
+                .filter(|(_, groups)| groups.contains(&group))
+                .count(),
+            1,
+            "group {group}"
+        );
     }
 }
 
@@ -145,24 +179,24 @@ fn index(values: &[&str], value: &str) -> usize {
         .expect("a checked value")
 }
 
-/// The packs of a menu with an effect: the recipes of its module, in file
+/// The packs of a page with an effect: the recipes of its module, in file
 /// order.
-fn module_recipes(family: &str, menu: &str) -> Vec<toml::Table> {
+fn module_recipes(family: &str, groups: &[&str]) -> Vec<toml::Table> {
     packs(family)
         .into_iter()
         .filter(|pack| text(pack, "effect").is_some_and(|e| !e.is_empty()))
-        .filter(|pack| text(pack, "menu") == Some(menu))
+        .filter(|pack| groups.contains(&text(pack, "group").unwrap()))
         .collect()
 }
 
 #[test]
-fn each_menu_fits_a_settings_row() {
+fn each_page_fits_its_module() {
     for family in FAMILIES {
-        for (menu, _) in MENUS {
-            let count = module_recipes(family, menu).len();
+        for (page, groups) in PAGES {
+            let count = module_recipes(family, groups).len();
             assert!(
-                (1..=MENU_RECIPES).contains(&count),
-                "{family} menu {menu}: {count} recipes"
+                (1..=PAGE_RECIPES).contains(&count),
+                "{family} page {page}: {count} recipes"
             );
         }
     }
@@ -181,12 +215,12 @@ fn label(name: &str) -> String {
     label
 }
 
-/// The C header of the recipes of a family in a menu
-/// (<module folder>/recipes-<family>.h).
-fn recipe_header(family: &str, menu: &str) -> String {
-    let recipes = module_recipes(family, menu);
+/// The C header of the recipes of a family on a page
+/// (extras/film/<page>/recipes-<family>.h).
+fn recipe_header(family: &str, page: &str, groups: &[&str]) -> String {
+    let recipes = module_recipes(family, groups);
     let mut out = format!(
-        "/* Generated from menu {menu} of recipes/{family}.toml by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef RECIPES_{upper}_H\n#define RECIPES_{upper}_H\n#define RECIPE_COUNT {count}U\nstatic const Recipe recipes[RECIPE_COUNT] = {{\n",
+        "/* Generated from recipes/{family}.toml (page {page}) by crates/grkit-core/tests/recipes.rs.\n   Do not edit: run GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test recipes. */\n#ifndef RECIPES_{upper}_H\n#define RECIPES_{upper}_H\n#define RECIPE_COUNT {count}U\nstatic const Recipe recipes[RECIPE_COUNT] = {{\n",
         upper = family.to_uppercase(),
         count = recipes.len()
     );
@@ -211,9 +245,9 @@ fn recipe_header(family: &str, menu: &str) -> String {
 fn the_recipe_headers_follow_the_recipes() {
     let update = std::env::var_os("GRKIT_UPDATE_GENERATED").is_some();
     for family in FAMILIES {
-        for (menu, folder) in MENUS {
-            let path = root().join(format!("{folder}/recipes-{family}.h"));
-            let expected = recipe_header(family, menu);
+        for (page, groups) in PAGES {
+            let path = root().join(format!("extras/film/{page}/recipes-{family}.h"));
+            let expected = recipe_header(family, page, groups);
             if update {
                 std::fs::write(&path, &expected).unwrap();
             }
@@ -227,21 +261,18 @@ fn the_recipe_headers_follow_the_recipes() {
     }
 }
 
-/// Each Recipe module lists the recipes of its menu: a PICK value, a menu
+/// Each Film page lists the recipes of its groups: a PICK value, a menu
 /// row, and a tile for each, after Off.
 #[test]
-fn the_recipe_modules_list_each_recipe() {
-    for (menu, folder) in MENUS {
-        check_module(menu, folder);
+fn the_film_pages_list_each_recipe() {
+    for (page, groups) in PAGES {
+        check_page(page, groups);
     }
 }
 
-fn check_module(menu: &str, folder: &str) {
-    let names: Vec<String> = module_recipes("gr4", menu)
-        .iter()
-        .map(|pack| text(pack, "name").unwrap().to_owned())
-        .collect();
-    let directory = root().join(folder);
+fn check_page(page: &str, groups: &[&str]) {
+    let recipes = module_recipes("gr4", groups);
+    let directory = root().join(format!("extras/film/{page}"));
     let manifest: toml::Table = std::fs::read_to_string(directory.join("module.toml"))
         .unwrap()
         .parse()
@@ -254,31 +285,31 @@ fn check_module(menu: &str, folder: &str) {
         .expect("a PICK setting");
     assert_eq!(
         pick["values"].as_integer(),
-        Some(names.len() as i64 + 1),
-        "PICK values"
+        Some(recipes.len() as i64 + 1),
+        "{page}: PICK values"
     );
     assert_eq!(
         manifest["tiles"].as_array().unwrap().len(),
-        names.len() + 1,
-        "tiles"
+        recipes.len() + 1,
+        "{page}: tiles"
     );
-    for language in ["en", "zh-Hans", "zh-Hant", "ja", "ko"] {
-        let text: toml::Table =
+    for language in LANGUAGES {
+        let file: toml::Table =
             std::fs::read_to_string(directory.join(format!("text/{language}.toml")))
                 .unwrap()
                 .parse()
                 .unwrap();
-        let rows: Vec<&str> = text["rows"]
+        let rows: Vec<&str> = file["rows"]
             .as_array()
             .unwrap()
             .iter()
             .map(|r| r.as_str().unwrap())
             .collect();
-        assert_eq!(rows.len(), names.len() + 1, "{language}: rows");
-        assert_eq!(
-            &rows[1..],
-            names.iter().map(String::as_str).collect::<Vec<_>>(),
-            "{language}: recipe names"
-        );
+        assert_eq!(rows.len(), recipes.len() + 1, "{page} {language}: rows");
+        let expected: Vec<&str> = recipes
+            .iter()
+            .map(|pack| text(pack, "name").unwrap())
+            .collect();
+        assert_eq!(&rows[1..], expected, "{page} {language}: recipe rows");
     }
 }

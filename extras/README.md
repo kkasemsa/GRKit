@@ -9,9 +9,9 @@ build and test each one (`crates/grkit-build/src/tests/modules.rs`).
 | `look-workshop` | Scripts that render every Film Look on your DNGs for the look workshop page. Not a module. | See its README. |
 | `overlay` | Overlay: film artefacts drawn into each picture: a vignette, dust and hairs, a light leak, and scratches, each Off/Light/Medium/Strong, with presets Faded, Dusty, Leaky, and Expired. The dust, leak, and scratches fall differently on every shot. Off by default. | `grkit module build --dir extras/overlay --out OVERLAY.GRM` |
 | `palette` | Palette Card: the main colours of each photo as swatches over its edge, a bottom strip, a side strip, or dots, with optional hex codes. | `grkit module build --dir extras/palette --out PALETTE.GRM` |
-| `recipe` | Recipe A: film recipes, each a Film Look with its grain, chosen from one menu: the colour negatives. Its recipes are menu `a` of the camera family's data (`recipes/gr3.toml`, `recipes/gr4.toml`). Choosing one sets the other menus to Off. It needs a GRKit with `effect_find` (module ABI 2.1). | `sh scripts/recipe-module.sh gr3\|gr4 a RECIPE.GRM` |
-| `recipe-b` | Recipe B: the black-and-white, slide, and cinema recipes (menu `b`), with the code of Recipe A. Choosing one sets the other menus to Off. | `sh scripts/recipe-module.sh gr3\|gr4 b RECIPEB.GRM` |
-| `recipe-c` | Recipe C: the pushed, slide, cinema, and instant recipes that A and B have no room for (menu `c`), with the code of Recipe A. | `sh scripts/recipe-module.sh gr3\|gr4 c RECIPEC.GRM` |
+| `film/neg` | Negative: the Film page of the colour negative recipes, each a Film Look with its grain. The three Film pages (`neg`, `slide`, `cine`) share the code of `extras/film/film_impl.h`; their recipes are the packs of their groups in the camera family's data (`recipes/gr3.toml`, `recipes/gr4.toml`), and `scripts/film-pages.py` writes their manifests, text, and canister tiles. Choosing a recipe on one page sets the other pages to Off. A page has at most 8 recipes: its tiles share the 64 KB code segment of the module. Needs a GRKit with `effect_find` (module ABI 2.1). | `sh scripts/recipe-module.sh gr3\|gr4 neg NEGATIVE.GRM` |
+| `film/slide` | Slide: the slide and instant recipes. | `sh scripts/recipe-module.sh gr3\|gr4 slide SLIDE.GRM` |
+| `film/cine` | Cine / B&W: the cinema and black-and-white recipes. | `sh scripts/recipe-module.sh gr3\|gr4 cine CINEBW.GRM` |
 
 To install an extra module, copy its `.GRM` file to `GRKIT/MODULES` on the
 card. A module there loads after the package modules (docs/module-reference.md).
