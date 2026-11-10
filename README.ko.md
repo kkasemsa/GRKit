@@ -5,26 +5,32 @@
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit은 RICOH GR III, GR IIIx, GR IV에 필름 느낌의 색감, XPan 같은 화면 비율, 날짜 각인, 입자감을 더해 주는 도구입니다. SD 카드에서 실행되며 펌웨어는 건드리지 않습니다. 카드를 빼면 카메라는 원래 상태로 돌아갑니다.
+GRKit은 RICOH GR III, GR IIIx, GR IV에 필름 느낌의 색감, XPan 같은 화면 비율, 날짜 각인, 글로우, 입자감을 더해 주는 도구입니다. SD 카드에서 실행되며 펌웨어는 건드리지 않습니다. 카드를 빼면 카메라는 원래 상태로 돌아갑니다.
 
 <p>
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.ko.jpg" alt="ADJ 모드의 GRKit 페이지" width="49%">
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.ko.jpg" alt="MENU 사용자 설정 탭의 GRKit 항목" width="49%">
 </p>
 
-사진: nagi usano, [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/), [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)
+사진: [MIKI Yoshihito](https://www.flickr.com/photos/mujitra/53311001084/), [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)
 
 ## 기능
 
 촬영 중에 ADJ 레버를 누르고 여섯 번째 항목인 GRK를 선택합니다.
 
 - **필름 룩**: Portra 400, Velvia 100, Tri-X 400 등. 촬영 화면에서 바로 확인할 수 있습니다. [grkit.app](https://grkit.app)에서 갖고 있는 `.cube` LUT나 Lightroom 프리셋도 가져올 수 있습니다. 각 룩은 오픈 소스 필름 LUT를 근사한 것이라 원본 LUT와 완전히 같지는 않습니다([출처](effects/NOTICE.md)).
-- **프레이밍**: XPan, 2.35:1, 16:9, 4:3, 5:4, 7:6, 1:1. 촬영 화면에 마스크나 프레임 선으로 범위를 표시합니다.
+- **프레이밍**: XPan, 2.35:1, 16:9, 4:3, 5:4, 7:6, 1:1. JPEG 자르기 또는 구도 가이드만 모드를 선택할 수 있습니다. 촬영 화면에 마스크나 프레임 선으로 범위를 표시합니다. 두 모드 모두 비율을 선택하면 카메라가 3:2로 설정됩니다. 꺼짐을 선택해도 카메라의 현재 화상비율은 유지됩니다.
+
+  RAW의 기본 크롭 범위는 카메라의 기본 3:2와 디지털 크롭 설정을 유지합니다. 내장 미리보기에는 선택한 구도가 표시될 수 있습니다.
+
 - **구도 가이드**: 9분할, 화면 중앙, 황금비, 대각선.
 - **날짜 각인**: 클래식, GR1s 도트, GR II의 세 가지 글꼴로 사진에 날짜를 넣습니다.
+- **글로우**: 블룸은 조명과 하이라이트 주변으로 빛을 부드럽게 퍼뜨립니다. 헐레이션은 밝은 광원 주변에 붉은 주황빛 번짐을 더해 영화용 필름의 효과를 재현합니다. 각 효과의 사용 여부와 강도를 따로 설정할 수 있으며 두 효과를 함께 사용할 수 있습니다.
 - **입자감**: 강도는 약·중·강·매우 강, 입자 크기는 자동·소·중·대에서 고릅니다.
 
 GRKit은 전원을 켜고 8~10초쯤 뒤에 불러와집니다. GR IV나 설치·업데이트 후 처음 켤 때는 더 걸립니다. 그전까지는 카메라 본래 설정으로 촬영됩니다. 모든 설정은 MENU 사용자 설정 탭 마지막의 GRKit 항목에 있습니다. 모듈을 직접 만들려면 [Writing a module](docs/modules.md)(영어)을 참고하세요.
+
+**빠른 시작**: 선택 사항인 [빠른 시작 펌웨어](resources/FASTBOOT.ko.md)를 쓰면 같은 GRKit 패키지가 전원을 켠 직후에 불러와집니다. grkit.app의 [빠른 시작 페이지](https://grkit.app/ko/fastboot/)에서 리코 공식 펌웨어로 만들고 펌웨어 업데이트로 설치합니다. GRKit 자체는 펌웨어에 아무것도 쓰지 않습니다.
 
 ## 지원 카메라
 
@@ -78,6 +84,7 @@ grkit verify dist/GRKit.zip
 
 - [아키텍처](docs/architecture.md)
 - [모듈 만들기](docs/modules.md)와 [모듈 레퍼런스](docs/module-reference.md)
+- [빠른 시작 펌웨어](docs/fastboot.md): SD 스크립트용 인터페이스
 - [릴리스 절차](docs/releasing.md)
 - [효과](effects/README.md)
 - [웹사이트](web/README.md)

@@ -1,9 +1,9 @@
 static const char target_marker[] __attribute__((used)) = "GRKIT_TARGET=gr3-2.10";
-#define MAX_COUNT 0x14U
-#define MAX_CHUNKS 0x4U
+#define MAX_COUNT 0x28U
+#define MAX_CHUNKS 0x5U
 #define ICONS_PER_CHUNK 0x28U
 #define ICON_STRIDE 0x1908U
-#define HOST_ICON_COUNT 0x4U
+#define HOST_ICON_COUNT 0x6U
 #define MAP_BASE 0x51000000U
 #define MAP_SIZE 0xf000000U
 #define HEAP_END 0x60000000U
@@ -13,15 +13,15 @@ static const char target_marker[] __attribute__((used)) = "GRKIT_TARGET=gr3-2.10
 #define PATCH_COUNT 0x2U
 #define CODE_RELOCATION_COUNT 0x1U
 #define TAIL_SYMBOL 0U
-#define TAIL_BYTES 0xc000U
-static const u32 relocation_words[] = { /* 2968 values, SHA-256 43f34df9c7d9be64931d0e63181e636b169378ae8ec175b4da1fe64c9e353b95 */ };
+#define TAIL_BYTES 0x0U
+static const u32 relocation_words[] = { /* 2968 values, SHA-256 2ecc236f17dce00df0a9f883eee583916e0559781c94b56c7a148f248a1d2b92 */ };
 static const struct relocation_window relocation_windows[] = {
-{0x5300ff00,0,768,0,0,1},
-{0x53010000,768,768,1,0,1},
+{0x53010100,0,768,1,0,1},
+{0x53010200,768,768,1,0,1},
 {0x530003f0,1536,24,0,0,0},
 {0x55002b6c,1560,64,0,1,1},
 {0x55018fcc,1624,64,0,1,1},
-{0x5300fd00,1688,768,1,0,1},
+{0x5300ff00,1688,768,0,0,1},
 {0x550186f4,2456,64,0,1,1},
 {0x55018d54,2520,64,1,1,1},
 {0x55018cb0,2584,64,0,1,1},
@@ -51,7 +51,7 @@ static const struct relocation_source relocation_sources[] = {
 };
 #define RELOCATION_SYMBOL_COUNT 15U
 #define RELOCATION_WINDOW_COUNT 14U
-static const struct relocation_tables relocation_tables = {relocation_windows,14,relocation_words,relocation_symbols,15,relocation_sources,15,2,0x10000,0xc000};
+static const struct relocation_tables relocation_tables = {relocation_windows,14,relocation_words,relocation_symbols,15,relocation_sources,15,2,0x10000,0x0};
 static u32 relocated[RELOCATION_SYMBOL_COUNT];
 static const u32 patch_symbols[] = {0xffff,0xffff};
 static const u32 patch_compare[] = {0x0,0x0};
@@ -93,12 +93,13 @@ static const u32 guard_symbols[] = {};
 #define LEGACY_STATE_PATH "/media/storage1/SCRIPT/PLUGINS/STATE.TXT"
 #define LEGACY_STATE_TMP_PATH "/media/storage1/SCRIPT/PLUGINS/STATE.TMP"
 #define LEGACY_EFFECTS_PATH "/media/storage1/SCRIPT/PLUGINS/EFFECTS"
-#define CORE_STATE_IDS 861965461,484706023,790270076,977751003
+#define CORE_STATE_IDS 861965461,484706023,790270076,977751003,826089556,458876999,697053196
 #define LEGACY_STATE_COUNT 6U
 #define LEGACY_STATE_FROM 495043802U,684634731U,161811731U,541741532U,957718554U,733922165U
 #define LEGACY_STATE_TO 861965461U,484706023U,604351797U,157666443U,247126882U,790270076U
 #define PARAMETER_KEY_BASE 990000000U
 #define PARAMETER_VALUE_MAX 387420488U
+#define TONING_KEY_BASE 990032768U
 #define STATE_TEXT_MAX 16384U
 #define GRKIT_VERSION "0.0.0"
 #define MODULES_PATH "/media/storage1/GRKIT/MODULES"
@@ -106,8 +107,8 @@ static const u32 guard_symbols[] = {};
 #define POINT_VIEWFINDER_OVERLAY 0x4U
 #define POINT_MENU_PAGE 0x1U
 #define POINT_PICTURE_ENCODE 0x10U
-static const char *const core_setting_names[] = {"CORE.TONE","CORE.ASPECT","CORE.GRAIN","CORE.GRAIN_SIZE"};
-static const u32 core_setting_points[] = {0x12,0xc,0x20,0x40};
+static const char *const core_setting_names[] = {"CORE.TONE","CORE.ASPECT","CORE.GRAIN","CORE.GRAIN_SIZE","CORE.ASPECT_MODE","CORE.ADJ","CORE.ADJ_MODULE"};
+static const u32 core_setting_points[] = {0x12,0xc,0x20,0x40,0xc,0x0,0x0};
 #define RTOS_EXECUTABLE_END 0x55000000U
 #define CORE_EXPORT_COUNT 0U
 static const u32 core_exports[] = {};
@@ -116,10 +117,12 @@ static const u8 off_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA
 static const u8 grkit_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA-256 8daa7522039e76004d273927f937c4a419594664c8c32f7b02bd7c515ffe272d */ };
 static const u8 version_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA-256 e239340476014064a1d36a3dddfb164bfbe4731b325a6ffb08a64397a39e44a6 */ };
 static const u8 modules_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA-256 c63d6fe4548456b6724e152bfa63bdadcf44163e6bb2b9e13a1842e9a9a4acea */ };
-#define MENU_TEXT_BYTES 1758U
-static const u8 menu_text[] __attribute__((aligned(4))) = { /* 1758 values, SHA-256 f72048b66c83ebedaa273a86c668479595da13733e4e9dbfe05ec8fc32ade667 */ };
-#define LABELS_BYTES 12892U
-static const u8 overlay_labels[] __attribute__((aligned(4))) = { /* 12892 values, SHA-256 f0a4ebaa93af4dde3aeac9b1b92a1f0c81d55e21382034ea830bc5fb51625855 */ };
+static const u8 modules_off_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA-256 b9fbdee6ffee02a4e4663ecd9b3ef74a8216ce39f2bb8495dab46a7fb7e942c2 */ };
+static const u8 rotate_pixels[] __attribute__((aligned(4))) = { /* 6400 values, SHA-256 8a5f3688e3432fc4c20d670e4b092cf937baf93ebd9db2e934d4e3ce63ae2d56 */ };
+#define MENU_TEXT_BYTES 2068U
+static const u8 menu_text[] __attribute__((aligned(4))) = { /* 2068 values, SHA-256 423c20f1522aeb5d231cd8542f28e589a958d8c3c071b91d05625a86c76346ce */ };
+#define LABELS_BYTES 20276U
+static const u8 overlay_labels[] __attribute__((aligned(4))) = { /* 20276 values, SHA-256 c553bdaa471f713bed227b8d7c6afd8edb857304d6e0c3a05bb7e444b918dcb6 */ };
 static const u8 stock_tables[] __attribute__((aligned(4))) = { /* 312 values, SHA-256 43c6a333770e97d39d0749933c4cc8fd3d39ab51233e06eaefe7dda15bae5cb6 */ };
 static const u32 code_relocations[] = {0x0,0x0};
 static const u8 before_0[] __attribute__((aligned(4))) = {0,0,0,0,0,0,0,0};

@@ -390,6 +390,8 @@ enum Bottom {
 const LARGE_NAME: [f32; 5] = [9.0, 8.0, 7.0, 6.0, 5.0];
 /// The capital heights of a name that is too wide for the pixel font, largest first.
 const SMALL_NAME: [f32; 2] = [5.0, 4.0];
+/// Capital heights of a cover number, the full size first.
+const NUMBER_CAPITALS: [f32; 3] = [11.0, 10.0, 9.0];
 /// A name may compress to this horizontal scale before a smaller size is tried.
 const NAME_COMPRESSION: f32 = 0.6;
 /// The width of a name in Roboto Condensed Black: the tile width less one pixel on each side.
@@ -465,17 +467,24 @@ fn cover(brand: &str, name: &str, number: &str, bottom: Bottom) -> Result<Vec<u8
     if pixel.is_err() && !fitted_name(&mut rgba, name, &SMALL_NAME, name_top as f32 + 2.5) {
         pixel.with_context(|| format!("Cover name {name:?} does not fit"))?;
     }
-    cover_text(
-        &mut rgba,
-        number,
-        11.0,
-        baseline,
-        -0.04,
-        34.0,
-        MIN_COMPRESSION,
-        255,
-    )
-    .with_context(|| format!("Cover number {number:?} does not fit"))?;
+    // A number that does not fit at full size takes a smaller size with the same
+    // vertical center.
+    NUMBER_CAPITALS
+        .iter()
+        .find_map(|&capital| {
+            let baseline = baseline - ((NUMBER_CAPITALS[0] - capital) / 2.0).round() as i32;
+            cover_text(
+                &mut rgba,
+                number,
+                capital,
+                baseline,
+                -0.04,
+                34.0,
+                MIN_COMPRESSION,
+                255,
+            )
+        })
+        .with_context(|| format!("Cover number {number:?} does not fit"))?;
     Ok(rgba)
 }
 
@@ -522,11 +531,159 @@ pub fn modules_pixels() -> Vec<u8> {
     rgba
 }
 
+/// The Modules tile with a line through it: the root row of Enable GRKit
+/// while it is Off.
+pub fn modules_off_pixels() -> Vec<u8> {
+    let mut rgba = modules_pixels();
+    strike(&mut rgba);
+    rgba
+}
+
+/// The Fn hint of a row where Fn turns a setting to its next value: a
+/// clockwise open circle arrow, white with a black edge on a transparent
+/// tile, as the native settings icon of the Fn hint has it. The arrow has a
+/// gap at the top right and its head at the top, pointing right.
+pub fn rotate_pixels() -> Vec<u8> {
+    // 4 x 4 samples in each pixel. The black edge is the white shape grown
+    // by EDGE samples.
+    const SAMPLES: usize = 4;
+    const SIDE: usize = 40 * SAMPLES;
+    const EDGE: i32 = 5;
+    const CENTER: (f32, f32) = (20.0, 21.0);
+    const RADIUS: f32 = 11.0;
+    const HALF_WIDTH: f32 = 2.0;
+    // The arc runs clockwise (y down) from START to END degrees.
+    const START: f32 = -15.0;
+    const END: f32 = 268.0;
+    const HEAD: f32 = 6.5;
+    let end = END.to_radians();
+    let tip = (CENTER.0 + RADIUS * end.cos(), CENTER.1 + RADIUS * end.sin());
+    let (along, across) = ((-end.sin(), end.cos()), (end.cos(), end.sin()));
+    let head = [
+        (tip.0 + along.0 * HEAD, tip.1 + along.1 * HEAD),
+        (
+            tip.0 + across.0 * HEAD - along.0 * 0.5,
+            tip.1 + across.1 * HEAD - along.1 * 0.5,
+        ),
+        (
+            tip.0 - across.0 * HEAD - along.0 * 0.5,
+            tip.1 - across.1 * HEAD - along.1 * 0.5,
+        ),
+    ];
+    let in_head = |x: f32, y: f32| {
+        let side = |(x1, y1): (f32, f32), (x2, y2): (f32, f32)| {
+            (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
+        };
+        let s = [
+            side(head[0], head[1]),
+            side(head[1], head[2]),
+            side(head[2], head[0]),
+        ];
+        s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
+    };
+    let mut white = vec![false; SIDE * SIDE];
+    for j in 0..SIDE {
+        for i in 0..SIDE {
+            let (x, y) = (
+                (i as f32 + 0.5) / SAMPLES as f32,
+                (j as f32 + 0.5) / SAMPLES as f32,
+            );
+            let (dx, dy) = (x - CENTER.0, y - CENTER.1);
+            let mut angle = dy.atan2(dx).to_degrees();
+            while angle < START {
+                angle += 360.0;
+            }
+            let on_arc = ((dx * dx + dy * dy).sqrt() - RADIUS).abs() <= HALF_WIDTH && angle <= END;
+            white[j * SIDE + i] = on_arc || in_head(x, y);
+        }
+    }
+    let mut edge = vec![false; SIDE * SIDE];
+    for j in 0..SIDE as i32 {
+        for i in 0..SIDE as i32 {
+            if !white[j as usize * SIDE + i as usize] {
+                continue;
+            }
+            for dy in -EDGE..=EDGE {
+                for dx in -EDGE..=EDGE {
+                    let (x, y) = (i + dx, j + dy);
+                    if dx * dx + dy * dy <= EDGE * EDGE
+                        && (0..SIDE as i32).contains(&x)
+                        && (0..SIDE as i32).contains(&y)
+                    {
+                        edge[y as usize * SIDE + x as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    // Alpha is binary: a pixel that the edge covers at least half is opaque,
+    // and its shade is the white share of the covered samples.
+    let mut rgba = vec![0; 40 * 40 * 4];
+    for y in 0..40 {
+        for x in 0..40 {
+            let (mut w, mut e) = (0, 0);
+            for b in 0..SAMPLES {
+                for a in 0..SAMPLES {
+                    let at = (y * SAMPLES + b) * SIDE + x * SAMPLES + a;
+                    w += usize::from(white[at]);
+                    e += usize::from(edge[at]);
+                }
+            }
+            if 2 * e >= SAMPLES * SAMPLES {
+                dot(&mut rgba, x, y, ((255 * w + e / 2) / e) as u8);
+            }
+        }
+    }
+    rgba
+}
+
+/// Mark a list tile as Off, as the native Off icons do: dim the drawing
+/// halfway to the body shade, then draw a white line with a black edge on
+/// the diagonal x = y, from the top left to the bottom right of the frame.
+/// Both have square ends, and the black edge passes the white ends. The
+/// widths and the 16 x 16 samples of each pixel reproduce the shades of the
+/// native Off icons. The line stops 1.5 pixels shorter at each end than the
+/// native one, clear of the frame corners.
+pub fn strike(rgba: &mut [u8]) {
+    // Half widths across the line, and the ends along it, as (x + y) / 2.
+    const WHITE: (f32, f32, f32) = (1.55, 5.25, 34.75);
+    const BLACK: (f32, f32, f32) = (2.83, 4.2, 35.8);
+    let inside = |(half, start, end): (f32, f32, f32), x: f32, y: f32| {
+        (x - y).abs() / std::f32::consts::SQRT_2 <= half && (start..=end).contains(&((x + y) / 2.0))
+    };
+    for y in 3..37 {
+        for x in 2..38 {
+            let at = (y * 40 + x) * 4;
+            for channel in &mut rgba[at..at + 3] {
+                if *channel > BODY {
+                    *channel = BODY + (*channel - BODY) / 2;
+                }
+            }
+            let (mut white, mut black) = (0u32, 0u32);
+            for sample in 0..256 {
+                let sx = x as f32 + ((sample % 16) as f32 + 0.5) / 16.0;
+                let sy = y as f32 + ((sample / 16) as f32 + 0.5) / 16.0;
+                white += u32::from(inside(WHITE, sx, sy));
+                black += u32::from(inside(BLACK, sx, sy));
+            }
+            if black == 0 {
+                continue;
+            }
+            let (white, black) = (white as f32 / 256.0, black as f32 / 256.0);
+            for channel in &mut rgba[at..at + 3] {
+                *channel = (f32::from(*channel) * (1.0 - black) + 255.0 * white).round() as u8;
+            }
+        }
+    }
+}
+
 /// The live-view labels in label order: the load cue, then the Framing ratios
 /// in capture area order (runtime/framing.c: photo_boxes), so label n names
 /// capture area n, then the sign of Date Imprint (LABEL_DATE in
-/// runtime/sdk/grkit.h).
-pub const OVERLAY_LABELS: [&str; 9] = [
+/// runtime/sdk/grkit.h), then its formats in Date Imprint STYLE order
+/// (label LABEL_DATE + STYLE): the order of year, month, and day, and HM
+/// when the time prints.
+pub const OVERLAY_LABELS: [&str; 14] = [
     "GRKit Loaded",
     "XPan",
     "16:9",
@@ -536,6 +693,11 @@ pub const OVERLAY_LABELS: [&str; 9] = [
     "5:4",
     "7:6",
     "DATE",
+    "YMD",
+    "YMD HM",
+    "MDY",
+    "DMY",
+    "DMY HM",
 ];
 /// The width of the black outline around the text. The native live-view text
 /// has one black pixel around the gray edge of each stroke, and keeps the
@@ -563,10 +725,53 @@ const OVERLAY_CONDENSE: f32 = 0.87;
 /// The native text has more space between its characters.
 const OVERLAY_TRACKING: f32 = 3.0;
 
-/// The text coverage of `label`: its width, then one coverage value for each
-/// pixel, row by row. The capitals start `OVERLAY_OUTLINE + OVERLAY_ABOVE`
-/// rows from the top, and the text starts after the left outline.
-fn overlay_coverage(label: &str) -> (usize, Vec<f32>) {
+/// The capital heights of a Date Imprint format that prints the time: the
+/// date on the first line, HM on a smaller second line. The two lines,
+/// with their outline, are as high as the marks of a status-row icon, such
+/// as Grain or Bloom: 36 rows. A format without the time is one line of the
+/// ratio size, as high as XPan.
+const OVERLAY_DATE_CAPITAL: usize = 17;
+const OVERLAY_TIME_CAPITAL: usize = 13;
+/// Rows between the date line and the time line. Fewer rows let the
+/// outlines of the two lines touch.
+const OVERLAY_LINE_GAP: usize = 4;
+/// The height of a two-line label: the marks of a status-row icon, 36 rows
+/// with the outline, and the rows above and below the capitals.
+pub const OVERLAY_TWO_LINE_HEIGHT: usize = OVERLAY_ABOVE + 36 + OVERLAY_BELOW;
+const _: () = assert!(
+    OVERLAY_DATE_CAPITAL + OVERLAY_LINE_GAP + OVERLAY_TIME_CAPITAL + 2 * OVERLAY_OUTLINE == 36
+);
+/// The tracking of the time line. Tracking that scales with its small
+/// capitals merges the outlines of H and M.
+const OVERLAY_TIME_TRACKING: f32 = 3.0;
+
+/// The lines of label `index` with their capital heights and tracking. The
+/// tracking of the date line scales with its capitals.
+fn overlay_lines(index: usize) -> Vec<(&'static str, usize, f32)> {
+    let label = OVERLAY_LABELS[index];
+    let date = OVERLAY_LABELS
+        .iter()
+        .position(|candidate| *candidate == "DATE")
+        .expect("the labels have DATE");
+    match label.split_once(' ') {
+        Some((date_line, time)) if index > date => vec![
+            (
+                date_line,
+                OVERLAY_DATE_CAPITAL,
+                OVERLAY_TRACKING * OVERLAY_DATE_CAPITAL as f32 / OVERLAY_CAPITAL as f32,
+            ),
+            (time, OVERLAY_TIME_CAPITAL, OVERLAY_TIME_TRACKING),
+        ],
+        _ => vec![(label, OVERLAY_CAPITAL, OVERLAY_TRACKING)],
+    }
+}
+
+/// The text coverage of label `index`: its width, its height, then one
+/// coverage value for each pixel, row by row. Each line is centered, its
+/// capitals start below the outline and `OVERLAY_ABOVE` rows, and its tracking
+/// comes from `overlay_lines`. A one-line label is `OVERLAY_LABEL_HEIGHT`
+/// high, and a two-line label `OVERLAY_TWO_LINE_HEIGHT`.
+fn overlay_coverage(index: usize) -> (usize, usize, Vec<f32>) {
     let font = FontRef::try_from_slice(OVERLAY_FONT).expect("embedded font is valid");
     let unit = font
         .outline_glyph(font.glyph_id('H').with_scale(100.0))
@@ -574,66 +779,87 @@ fn overlay_coverage(label: &str) -> (usize, Vec<f32>) {
         .px_bounds()
         .height()
         / 100.0;
-    let size = OVERLAY_CAPITAL as f32 / unit;
-    let scale = PxScale {
-        x: size * OVERLAY_CONDENSE,
-        y: size,
-    };
-    let scaled = font.as_scaled(scale);
-    let mut caret = 0.0;
-    let mut previous = None;
-    let mut outlines = Vec::new();
-    for character in label.chars() {
-        let id = scaled.glyph_id(character);
-        if let Some(previous) = previous {
-            caret += scaled.kern(previous, id);
-        }
-        outlines.extend(font.outline_glyph(id.with_scale_and_position(scale, point(caret, 0.0))));
-        caret += scaled.h_advance(id) + OVERLAY_TRACKING;
-        previous = Some(id);
-    }
-    let bounds = outlines
-        .iter()
-        .map(|outline| outline.px_bounds())
-        .reduce(|a, b| Rect {
-            min: point(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
-            max: point(a.max.x.max(b.max.x), a.max.y.max(b.max.y)),
-        })
-        .expect("a label has outlines");
-    let width = bounds.width().ceil() as usize + 2 * OVERLAY_OUTLINE;
-    // Whole-pixel offsets keep vertical and horizontal stems sharp. The
-    // baseline is the row after the capitals.
-    let dx = OVERLAY_OUTLINE as i32 - bounds.min.x.floor() as i32;
-    let dy = (OVERLAY_OUTLINE + OVERLAY_ABOVE + OVERLAY_CAPITAL) as i32;
-    let mut coverage = vec![0f32; width * OVERLAY_LABEL_HEIGHT];
-    for outline in outlines {
-        let origin = outline.px_bounds().min;
-        outline.draw(|x, y, value| {
-            let (x, y) = (
-                origin.x as i32 + x as i32 + dx,
-                origin.y as i32 + y as i32 + dy,
-            );
-            if (0..width as i32).contains(&x) && (0..OVERLAY_LABEL_HEIGHT as i32).contains(&y) {
-                let cell = &mut coverage[y as usize * width + x as usize];
-                *cell = (*cell + value).min(1.0);
+    let mut lines = Vec::new();
+    for (text, capital, tracking) in overlay_lines(index) {
+        let size = capital as f32 / unit;
+        let scale = PxScale {
+            x: size * OVERLAY_CONDENSE,
+            y: size,
+        };
+        let scaled = font.as_scaled(scale);
+        let mut caret = 0.0;
+        let mut previous = None;
+        let mut outlines = Vec::new();
+        for character in text.chars() {
+            let id = scaled.glyph_id(character);
+            if let Some(previous) = previous {
+                caret += scaled.kern(previous, id);
             }
-        });
+            outlines
+                .extend(font.outline_glyph(id.with_scale_and_position(scale, point(caret, 0.0))));
+            caret += scaled.h_advance(id) + tracking;
+            previous = Some(id);
+        }
+        let bounds = outlines
+            .iter()
+            .map(|outline| outline.px_bounds())
+            .reduce(|a, b| Rect {
+                min: point(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
+                max: point(a.max.x.max(b.max.x), a.max.y.max(b.max.y)),
+            })
+            .expect("a label has outlines");
+        lines.push((outlines, bounds, capital));
     }
-    (width, coverage)
+    let text_width = |bounds: &Rect| bounds.width().ceil() as usize;
+    let width = lines
+        .iter()
+        .map(|(_, bounds, _)| text_width(bounds))
+        .max()
+        .unwrap()
+        + 2 * OVERLAY_OUTLINE;
+    let height = 2 * OVERLAY_OUTLINE
+        + OVERLAY_ABOVE
+        + lines.iter().map(|(_, _, capital)| capital).sum::<usize>()
+        + OVERLAY_LINE_GAP * (lines.len() - 1)
+        + OVERLAY_BELOW;
+    let mut coverage = vec![0f32; width * height];
+    let mut top = OVERLAY_OUTLINE + OVERLAY_ABOVE;
+    for (outlines, bounds, capital) in lines {
+        // Whole-pixel offsets keep vertical and horizontal stems sharp. The
+        // baseline is the row after the capitals.
+        let center = (width - 2 * OVERLAY_OUTLINE - text_width(&bounds)) / 2;
+        let dx = (OVERLAY_OUTLINE + center) as i32 - bounds.min.x.floor() as i32;
+        let dy = (top + capital) as i32;
+        for outline in outlines {
+            let origin = outline.px_bounds().min;
+            outline.draw(|x, y, value| {
+                let (x, y) = (
+                    origin.x as i32 + x as i32 + dx,
+                    origin.y as i32 + y as i32 + dy,
+                );
+                if (0..width as i32).contains(&x) && (0..height as i32).contains(&y) {
+                    let cell = &mut coverage[y as usize * width + x as usize];
+                    *cell = (*cell + value).min(1.0);
+                }
+            });
+        }
+        top += capital + OVERLAY_LINE_GAP;
+    }
+    (width, height, coverage)
 }
 
-/// The pixels of `label`: 0 where the label is transparent, else the gray of
+/// The width, the height, and the pixels of label `index`: 0 where the label is
+/// transparent, else the gray of
 /// an opaque pixel, 1 for the black outline and up to 255 for white text.
 /// Text edges blend toward the outline.
-fn overlay_label(label: &str) -> (usize, Vec<u8>) {
-    let (width, coverage) = overlay_coverage(label);
+fn overlay_label(index: usize) -> (usize, usize, Vec<u8>) {
+    let (width, height, coverage) = overlay_coverage(index);
     // The rasterizer leaves tiny coverage between overlapping contours, so
     // only coverage that rounds to a gray counts as text.
     let coverage: Vec<f32> = coverage
         .into_iter()
         .map(|value| if value * 255.0 < 0.5 { 0.0 } else { value })
         .collect();
-    let height = OVERLAY_LABEL_HEIGHT;
     let radius = OVERLAY_OUTLINE as i32;
     let inked = |x: i32, y: i32| {
         (0..width as i32).contains(&x)
@@ -658,7 +884,7 @@ fn overlay_label(label: &str) -> (usize, Vec<u8>) {
             };
         }
     }
-    (width, pixels)
+    (width, height, pixels)
 }
 
 /// The label table that the installer copies after the menu text
@@ -671,12 +897,11 @@ fn overlay_label(label: &str) -> (usize, Vec<u8>) {
 /// as its own text: white with a black outline, without a background.
 pub fn overlay_labels() -> Vec<u8> {
     let mut table = vec![0; OVERLAY_LABELS.len() * 8];
-    for (index, label) in OVERLAY_LABELS.iter().enumerate() {
-        let (width, pixels) = overlay_label(label);
+    for index in 0..OVERLAY_LABELS.len() {
+        let (width, height, pixels) = overlay_label(index);
         let offset = table.len() as u32;
         table[index * 8..index * 8 + 2].copy_from_slice(&(width as u16).to_le_bytes());
-        table[index * 8 + 2..index * 8 + 4]
-            .copy_from_slice(&(OVERLAY_LABEL_HEIGHT as u16).to_le_bytes());
+        table[index * 8 + 2..index * 8 + 4].copy_from_slice(&(height as u16).to_le_bytes());
         table[index * 8 + 4..index * 8 + 8].copy_from_slice(&offset.to_le_bytes());
         for row in pixels.chunks(width) {
             let mut spans = Vec::new();

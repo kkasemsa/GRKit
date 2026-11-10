@@ -5,9 +5,9 @@
 use super::common::{self, join, len};
 use super::Family;
 use crate::components::{
-    b, bl, HookSpec,
+    b, bl, bl_shared, HookSpec,
     Part::{Framing, Menu, Processing},
-    Point::{MenuPage, PipelineGrain, PipelineGrainSize, Tuning},
+    Point::{CaptureAspect, MenuPage, PipelineGrain, PipelineGrainSize, Tuning},
 };
 
 pub const FAMILY: Family = Family {
@@ -26,14 +26,18 @@ const GROUPS: &[&[HookSpec]] = &[
     common::MENU,
     common::VIEWFINDER,
     common::PICTURE,
+    common::DEVELOP_TONE,
+    common::DEVELOP_ASPECT,
     GRAIN,
+    TONING,
 ];
 
 /// Image Control processing (`runtime/processing.S`): the BL to the parameter
 /// normalizer, the type-table loads, the last packet field store, the
 /// custom-curve flag, and the BL to the curve getter.
 const PROCESSING: &[HookSpec] = &[
-    bl("module_parameters", Processing, Tuning),
+    // The shot ring records the capture crop even without Film Look.
+    bl_shared("module_parameters", Processing, Tuning, CaptureAspect),
     b("module_processing", Processing, Tuning),
     b("module_packet", Processing, Tuning),
     b("module_gamma_flag", Processing, Tuning),
@@ -54,7 +58,17 @@ const ICONS: &[HookSpec] = &[
 /// Extra Strong.
 const GRAIN: &[HookSpec] = &[
     bl("grain_particle", Framing, PipelineGrain),
-    bl("grain_gate", Framing, PipelineGrain),
+    // Film Look needs the gate for the Shading and Clarity of its effects.
+    bl_shared("grain_gate", Framing, PipelineGrain, Tuning),
     bl("grain_fill", Framing, PipelineGrainSize),
     b("grain_amplitude", Framing, PipelineGrain),
+];
+
+/// Toning of a native look on the parameter page (`runtime/toning.h`): the
+/// Image Control model getter and setter of the Retro Toning row (kind 9), and
+/// the BL to its settings getter in the row text.
+const TONING: &[HookSpec] = &[
+    b("menu_parameter_get_9", Menu, Tuning),
+    b("menu_parameter_set_9", Menu, Tuning),
+    bl("menu_parameter_row_9", Menu, Tuning),
 ];

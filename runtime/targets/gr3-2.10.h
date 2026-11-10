@@ -28,6 +28,14 @@
    to 261, table 0x53d2b6f4). The shot settings hold the type at the same
    offset as the settings payload. */
 #define NATIVE_MONOCHROME_TYPES 0x0001e000U
+/* The digital filter values of the shot settings, which the grain stage of
+   recorded pictures reads: Shading and Clarity (0 to 8, 4 is neutral),
+   Particle (0 is no grain), and the HDR Tone strength (0 is off). The native
+   parameter build writes them for its Image Control type. */
+#define SETTINGS_SHADING 0x793
+#define SETTINGS_CLARITY 0x794
+#define SETTINGS_GRAIN 0x795
+#define SETTINGS_HDR 0x796
 
 /* Allocation and the vector helpers of View children. */
 #define FW_ALLOCATE FIRMWARE(0x536af2a8)
@@ -101,6 +109,15 @@
 #define MODEL_SNAPSHOT 3
 /* The row kinds of the Standard adjustments, in GRKIT_RECORD_PARAMETERS order. */
 #define PARAMETER_KINDS {0,1,2,3,4,5,6,13,14}
+/* The last two of them, Shading and Clarity, for assembly (runtime/processing.h). */
+#define PARAMETER_KIND_SHADING 13
+#define PARAMETER_KIND_CLARITY 14
+/* Toning (runtime/toning.h): base kind 9 of the row lists at 0x53b3488c,
+   the rows of Retro, adds Toning, row kind 9, to the Standard rows. Its model
+   getter and setter and row read hook as adjustment 9. The page keeps the
+   Standard type: the Retro type also sets its own Shading. */
+#define PARAMETER_TONING_BASE 9
+#define PARAMETER_TONING_KIND 9
 /* The page event that opens another controller (0x2000015) from the page. */
 #define DETAIL_EV_SUBPAGE 0x88
 /* The native settings page of a GRKit root row (runtime/menu_settings.h). It borrows
@@ -232,7 +249,8 @@
 /* 1 in movie mode. */
 #define ADJ_MOVIE_FIELD 0x270
 #define ADJ_MOVIE(controller) BYTE(controller,ADJ_MOVIE_FIELD)
-#define ADJ_ACTION 0x279
+/* 1 while the held Fn action of an ADJ slot (type 13) runs. */
+#define ADJ_FN_HELD 0x279
 
 /* AdjModeController events (the first halfword of an event). */
 #define EV_SWITCH 5
@@ -258,8 +276,65 @@
 #define FW_ICON_TABLE FIRMWARE(0x550020fc)
 /* The native Off icon, used until the installer provides the GRKit one. */
 #define NATIVE_OFF_ICON() WORD(FW_ICON_TABLE,0x166*4)
+/* RawDevelopmentModel: the guard of its static instance, and the instance.
+   The family header gives its state (DEVELOP_STATE). */
+#define FW_DEVELOP_GUARD FIRMWARE(0x550662d0)
+#define FW_DEVELOP_MODEL FIRMWARE(0x550666e0)
+/* The time of the photo in the playback metadata (runtime/targets/gr3.h). */
+#define METADATA_TIME 0x3c0
+/* The EXIF Orientation of the photo in the playback metadata. */
+#define METADATA_ORIENTATION 0x2b0
+/* RAW development, the Image Control list (runtime/menu.c): the label and
+   the icon of an Image Control (model, category, value), the child view of a
+   list row, the controller ID word, the ID of the list, and the first
+   instruction of the row category, which its entry hook replaces. The
+   subtitle of the list is at +0x160 of the controller (r4 in UpdateSubTitle),
+   the subtitle of RawDevelopmentTopController in r6. */
+#define FW_DEVELOP_TONE_TEXT FIRMWARE(0x532891f4)
+#define FW_DEVELOP_TONE_ICON FIRMWARE(0x532891a8)
+/* RAW development, the Fn adjustments (runtime/develop.h). RawDevelopmentModel
+   holds the selected Image Control: the category at DEVELOP_CATEGORY and the
+   value of each category from DEVELOP_VALUES. Each Image Control has a
+   parameter set of a byte for each parameter kind; that of Standard is at
+   DEVELOP_PARAMETERS. The parameter page of the development edits the set of
+   the selected Image Control. */
+#define DEVELOP_CATEGORY 0x82
+#define DEVELOP_VALUES 0x83
+#define DEVELOP_PARAMETERS 0x97
+/* RAW development, the aspect list (runtime/menu.c): the row value of the
+   model (model, row), the capture aspect of a development aspect (model,
+   value), and the label and the icon of a development aspect (model,
+   value). */
+#define FW_DEVELOP_ASPECT_VALUE FIRMWARE(0x532833e4)
+#define FW_DEVELOP_ASPECT_CAPTURE FIRMWARE(0x53289e8c)
+#define FW_DEVELOP_ASPECT_TEXT FIRMWARE(0x53289f38)
+#define FW_DEVELOP_ASPECT_ICON FIRMWARE(0x53289efc)
+#define FW_ROW_CHILD FIRMWARE(0x533a1d34)
+#define CONTROLLER_ID 0x124
+#define DEVELOP_TONE_LIST 0x4000025U
+/* The ID of the aspect list of the development, and the first instruction
+   of the row value of the model, which its entry hook replaces. */
+#define DEVELOP_ASPECT_LIST 0x4000022U
+#define DEVELOP_ASPECT_VALUE_FIRST "ldrb r3, [r0, #5]"
+/* The list view of RawDevelopmentParameterSetController, and the style and
+   the height of its row views. */
+#define DEVELOP_LIST_VIEW 0x168
+#define DEVELOP_ROW_STYLE 0x1aU
+#define DEVELOP_ROW_HEIGHT 0x3aU
+/* The children of its row views: their maker (row, count, layout), the
+   layout, and the setups of the icon and of the text that the list init does. */
+#define FW_ROW_CHILDREN FIRMWARE(0x533a20dc)
+#define DEVELOP_ROW_LAYOUT FIRMWARE(0x53b33640)
+#define FW_ICON_VIEW_STYLE FIRMWARE(0x5339aa30)
+#define FW_STRING_VIEW_STYLE FIRMWARE(0x53390ff8)
+#define DEVELOP_CATEGORY_FIRST "ldrb r3, [r0, #5]"
+#define DEVELOP_LIST_TITLE ldr r3, [r4, #0x160]
+#define DEVELOP_TOP_TITLE mov r3, r6
 /* Maker-note IFD entry setter: (entry, 0, value) stores a u16 value. */
 #define FW_IFD_SET_SHORT FIRMWARE(0x535d02c8)
+/* DNG LONG tag element writer and native sensor rectangle helper. */
+#define FW_IFD_SET_LONG FIRMWARE(0x535d02e0)
+#define FW_DNG_NATIVE_RECT FIRMWARE(0x5365f0ec)
 /* LiveViewController: nonzero in movie mode, and the LCD canvas. */
 #define LIVEVIEW_MOVIE 0x2d2
 #define LIVEVIEW_CANVAS 0x15c

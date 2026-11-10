@@ -83,7 +83,10 @@ fn package_round_trip_is_deterministic_and_preserves_metadata() {
     for index in 0..archive.len() {
         let entry = archive.by_index(index).unwrap();
         assert_eq!(entry.compression(), CompressionMethod::Stored);
-        assert_eq!(entry.last_modified().unwrap().year(), 2026);
+        // The time follows from the bytes: in 2026 or 2027, with even seconds.
+        let time = entry.last_modified().unwrap();
+        assert!((2026..=2027).contains(&time.year()));
+        assert_eq!(time.second() % 2, 0);
         let name = entry.name().unwrap();
         let expected = if name.ends_with(".BIN") || name.ends_with(".SH") {
             0o100755
@@ -364,16 +367,20 @@ fn json_matches_existing_ascii_pretty_format() {
 
 #[test]
 fn runtime_layout_matches_target_capacity() {
-    assert_eq!(runtime::MAX_COUNT, 20);
+    assert_eq!(runtime::MAX_COUNT, 40);
     assert_eq!(
         runtime::layout(0).unwrap(),
-        json!({"words": 192, "tail_words": 45743, "icon_words": [6408]})
+        json!({"words": runtime::HEADER_SIZE / 4, "tail_words": runtime::TAIL_WORDS, "icon_words": [9612]})
     );
     assert_eq!(
-        runtime::layout(20).unwrap(),
-        json!({"words": 21952, "tail_words": 45743, "icon_words": [38448]})
+        runtime::layout(40).unwrap(),
+        json!({
+            "words": (runtime::HEADER_SIZE + 40 * 0x1100) / 4,
+            "tail_words": runtime::TAIL_WORDS,
+            "icon_words": [64080, 9612]
+        })
     );
-    assert!(runtime::layout(21).is_err());
+    assert!(runtime::layout(41).is_err());
 }
 
 #[test]
@@ -388,25 +395,28 @@ fn allocation_includes_host_icons_at_chunk_boundaries() {
             .map(|v| v.as_u64().unwrap() as usize)
             .collect();
         // The registry holds the header and the records. The tail holds the
-        // picture scratch (the date stamp masks, then the shot ring), the menu
-        // text, the live-view labels, then the profile table (8 modules of 16
-        // bytes, 31 counter slots of 12 bytes).
-        assert_eq!(words * 4, 768 + count * 0x1100, "count {count}");
+        // picture scratch, the menu text, the live-view labels, the profile
+        // table, and the Toning curves (abi::TAIL_SIZE).
         assert_eq!(
-            layout["tail_words"].as_u64().unwrap() as usize * 4,
-            141376 + 8 + 8 * 16 + 24576 + 16384 + 128 + 31 * 12
+            words * 4,
+            runtime::HEADER_SIZE + count * 0x1100,
+            "count {count}"
         );
+        // One TTL array holds the tail: at most 65536 words.
+        let tail = layout["tail_words"].as_u64().unwrap() as usize;
+        assert_eq!(tail * 4, grkit_core::abi::TAIL_SIZE);
+        assert!(tail <= grkit_core::abi::MODULE_ARRAY_WORDS);
         assert_eq!(
             icons.iter().sum::<usize>() * 4,
-            (count + 4) * 6408,
+            (count + 6) * 6408,
             "count {count}"
         );
         assert!(std::iter::once(&words)
             .chain(&icons)
             .all(|v| (1..=65536).contains(v)));
-        // The 4 host icons come first, then the effects, 40 icons in each
+        // The 6 host icons come first, then the effects, 40 icons in each
         // chunk. Module tiles follow the effects (runtime/installer.c).
-        assert_eq!(icons.len(), (count + 4).div_ceil(40), "count {count}");
+        assert_eq!(icons.len(), (count + 6).div_ceil(40), "count {count}");
     }
     assert!(runtime::layout(usize::MAX).is_err());
 }
@@ -1141,4 +1151,350 @@ fn module_files_install_from_the_modules_folder() {
     let error = package(&modules).unwrap_err();
     let limit = format!("at most {} modules", grkit_core::runtime::MODULES_MAX);
     assert!(error.to_string().contains(&limit), "{error}");
+}
+
+/// Only placement headers are needed by package preflight. Installer tests
+/// cover the setting and icon descriptors that follow them in real modules.
+fn indicator_module(id: &str, placements: &[(u32, u32)]) -> Vec<u8> {
+    let count = placements.len();
+    let mut code = vec![0; 40 + count * (8 + 24)];
+    let mut put = |offset: usize, value: u32| {
+        code[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    put(0, 40);
+    put(
+        4,
+        grkit_core::grm::ABI_MAJOR << 16 | grkit_core::grm::ABI_MINOR,
+    );
+    put(8, 40);
+    put(12, count as u32);
+    let mut relocations = vec![8];
+    for (index, &(placement, slot)) in placements.iter().enumerate() {
+        let entry = 40 + index * 8;
+        let descriptor = 40 + count * 8 + index * 24;
+        put(entry, 5);
+        put(entry + 4, descriptor as u32);
+        put(descriptor, 24);
+        put(descriptor + 4, placement);
+        put(descriptor + 8, slot);
+        relocations.push((entry + 4) as u32);
+    }
+    grkit_core::grm::Module {
+        id: id.into(),
+        code,
+        code_relocations: relocations,
+        ..Default::default()
+    }
+    .encode()
+    .unwrap()
+}
+
+#[test]
+fn package_viewfinder_capacity_is_checked_across_modules() {
+    let build = |modules: &[Vec<u8>]| {
+        assemble(
+            &[runtime()],
+            &EffectSet::default(),
+            modules,
+            &camera::GR3,
+            &english(),
+        )
+    };
+    let first = indicator_module("FIRST", &[(2, 0); 3]);
+    let second = indicator_module("SECOND", &[(2, 0); 3]);
+    let valid = build(&[first.clone(), second]).unwrap();
+    assert_eq!(valid.contents.modules, ["FIRST", "SECOND"]);
+
+    let second = indicator_module("SECOND", &[(2, 0); 4]);
+    let error = build(&[first, second.clone()]).unwrap_err().to_string();
+    assert!(
+        error.contains("capacity of 6") && error.contains("SECOND"),
+        "{error}"
+    );
+
+    // Imported ZIP verification uses the same preflight as assembly.
+    let mut files = unpack(&valid.bytes);
+    files.insert("SD_ROOT/SCRIPT/GRKIT/MODULES/SECOND.GRM".into(), second);
+    let bytes = repack(&with_sums(files), CompressionMethod::Stored);
+    assert!(verify_package(&bytes)
+        .unwrap_err()
+        .to_string()
+        .contains("capacity of 6"));
+}
+
+#[test]
+fn package_viewfinder_slots_have_one_owner() {
+    let build = |modules: &[Vec<u8>]| {
+        assemble(
+            &[runtime()],
+            &EffectSet::default(),
+            modules,
+            &camera::GR3,
+            &english(),
+        )
+    };
+    let first = indicator_module("FIRST", &[(1, 1)]);
+    let second = indicator_module("SECOND", &[(2, 0); 5]);
+    assert!(build(&[first.clone(), second]).is_ok());
+    let second = indicator_module("SECOND", &[(1, 1)]);
+    let error = build(&[first, second]).unwrap_err().to_string();
+    assert!(
+        error.contains("image_control") && error.contains("FIRST") && error.contains("SECOND"),
+        "{error}"
+    );
+    let error = build(&[indicator_module("FIRST", &[(1, 1), (1, 1)])])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("image_control") && error.contains("FIRST"),
+        "{error}"
+    );
+}
+
+#[test]
+fn package_viewfinder_descriptors_are_bounded_before_reading() {
+    for (offset, value) in [(8, u32::MAX - 3), (12, 17), (44, u32::MAX - 3), (56, 3)] {
+        let mut module =
+            grkit_core::grm::Module::decode(&indicator_module("BROKEN", &[(2, 0)])).unwrap();
+        module.code[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        // Keep a malformed pointer out of relocation validation to exercise
+        // the descriptor reader, as an untrusted file can do.
+        module.code_relocations.retain(|&at| at != offset as u32);
+        let error = assemble(
+            &[runtime()],
+            &EffectSet::default(),
+            &[module.encode().unwrap()],
+            &camera::GR3,
+            &english(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("viewfinder indicators of BROKEN"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
+fn package_files_gives_the_card_files_of_a_package_from_any_release() {
+    let files = unpack(&package());
+    let card = package_files(&package()).unwrap();
+    assert_eq!(card, card_files(&package()).unwrap());
+    assert!(card
+        .keys()
+        .any(|path| path.starts_with("SCRIPT/GRKIT/EFFECTS/") && path.ends_with(".GRF")));
+
+    // A runtime that this version does not know, as in a ZIP of an older release, fails the
+    // package checks but still gives the files.
+    let mut older = files.clone();
+    older.retain(|name, _| !name.ends_with(".BIN"));
+    let older = repack(&older, CompressionMethod::Deflated);
+    assert!(verify_package(&older).is_err());
+    let kept = package_files(&older).unwrap();
+    assert!(kept
+        .keys()
+        .all(|path| card.contains_key(path) && !path.ends_with(".BIN")));
+    assert_eq!(
+        kept.len(),
+        files
+            .keys()
+            .filter(|name| name.starts_with("SD_ROOT/") && !name.ends_with(".BIN"))
+            .count()
+    );
+
+    // Entries outside SD_ROOT are left out, and a file that is not a ZIP fails.
+    let mut other = Files::new();
+    other.insert("LICENSES.md".into(), b"licenses".to_vec());
+    assert!(package_files(&repack(&other, CompressionMethod::Stored))
+        .unwrap()
+        .is_empty());
+    assert!(package_files(b"not a zip").is_err());
+}
+
+#[test]
+fn a_package_keeps_the_import_library_that_the_camera_does_not_install() {
+    use grkit_core::{card::IMPORTS_FILE, imports};
+    let library = imports::encode(&[
+        imports::Import {
+            details: "{}".into(),
+            effect: testing::effect("lut-warm"),
+        },
+        imports::Import {
+            details: "{}".into(),
+            effect: testing::effect("lut-cold"),
+        },
+    ])
+    .unwrap();
+    let built = assemble_with(
+        &[runtime()],
+        &testing::effect_set(&["test-effect"]),
+        &testing::official_modules(),
+        &camera::GR3,
+        &english(),
+        Extras {
+            imports: Some(&library),
+        },
+    )
+    .unwrap();
+    // The library holds more imports than the package installs, and the list leaves it out.
+    assert_eq!(built.contents.imports, 2);
+    assert_eq!(built.contents.effect_ids, ["test-effect"]);
+    let files = unpack(&built.bytes);
+    assert_eq!(files[&format!("SD_ROOT/{IMPORTS_FILE}")], library);
+    let list = String::from_utf8(files[&format!("SD_ROOT/{PACKAGE_LIST}")].clone()).unwrap();
+    assert!(!list.contains("IMPORTS"));
+    assert_eq!(verify_package(&built.bytes).unwrap().imports, 2);
+    assert_eq!(verify_package(&package()).unwrap().imports, 0);
+
+    // A damaged library fails the package checks.
+    let mut damaged = files.clone();
+    damaged.insert(format!("SD_ROOT/{IMPORTS_FILE}"), b"GRKIMP01".to_vec());
+    assert!(verify_package(&repack(&with_sums(damaged), CompressionMethod::Stored)).is_err());
+}
+
+/// A runtime build has the fast-boot files of each release that it runs, and
+/// a package has those of its camera, with their install files and a loader
+/// that runs them.
+#[test]
+fn a_package_holds_the_fast_boot_files_of_its_camera() {
+    // The files of a release: the prefix, then the release number.
+    let names = |bytes: &[u8], prefix: &str| -> Vec<String> {
+        files_of(bytes)
+            .keys()
+            .filter_map(|path| path.strip_prefix(&format!("SD_ROOT/SCRIPT/GRKIT/{prefix}")))
+            .filter(|name| name.starts_with(|c: char| c.is_ascii_digit()))
+            .map(|name| format!("{prefix}{name}"))
+            .collect()
+    };
+    let gr3 = testing::fast_runtime("gr3-2.10");
+    for name in ["F588210", "F588220", "F609160", "F609170"] {
+        assert!(gr3
+            .files()
+            .contains_key(&format!("SCRIPT/GRKIT/{name}.BIN")));
+    }
+    let package = |runtimes: &[VerifiedRuntime], camera: &camera::Camera| {
+        assemble(
+            runtimes,
+            &EffectSet::default(),
+            &testing::official_modules(),
+            camera,
+            &english(),
+        )
+        .unwrap()
+        .bytes
+    };
+    let cases = [
+        (
+            &camera::GR3,
+            vec![gr3.clone()],
+            vec!["F588210.BIN", "F588220.BIN"],
+        ),
+        (
+            &camera::GR3X,
+            vec![gr3.clone()],
+            vec!["F609160.BIN", "F609170.BIN"],
+        ),
+        (
+            &camera::GR4,
+            vec![
+                testing::fast_runtime("gr4-1.11"),
+                testing::fast_runtime("gr4-1.20"),
+                testing::marked_runtime("gr4-1.20-0528"),
+            ],
+            vec!["F636111.BIN", "F636120.BIN"],
+        ),
+    ];
+    for (camera, runtimes, expected) in cases {
+        let bytes = package(&runtimes, camera);
+        let expected: Vec<String> = expected.into_iter().map(String::from).collect();
+        let installs: Vec<String> = expected
+            .iter()
+            .map(|name| name.replacen('F', "I", 1))
+            .collect();
+        assert_eq!(names(&bytes, "F"), expected, "{}", camera.name);
+        assert_eq!(names(&bytes, "I"), installs, "{}", camera.name);
+        let files = files_of(&bytes);
+        assert!(!files.contains_key("SD_ROOT/SCRIPT/GRKIT/FRUN.BIN"));
+        let loader = String::from_utf8(files["SD_ROOT/SCRIPT/GRKIT/LOADER.TTL"].clone()).unwrap();
+        for (name, install) in expected.iter().zip(&installs) {
+            let fast = &files[&format!("SD_ROOT/SCRIPT/GRKIT/{name}")];
+            assert_eq!(
+                files[&format!("SD_ROOT/SCRIPT/GRKIT/{install}")],
+                runtime::install_file(fast).unwrap()
+            );
+            for file in [name, install] {
+                assert!(
+                    loader.contains(&format!("SYS_memovr C:\\SCRIPT\\GRKIT\\{file} 0 call")),
+                    "{file}"
+                );
+            }
+        }
+        verify_package(&bytes).unwrap();
+
+        // A package without the fast-boot files is still a package.
+        let mut plain = files.clone();
+        plain.retain(|path, _| {
+            let path = path.trim_start_matches("SD_ROOT/");
+            runtime::FastRelease::of_path(path).is_none()
+                && runtime::FastRelease::of_install_path(path).is_none()
+        });
+        assert!(validate_contents(&with_sums(plain.clone())).is_err());
+        let plain_loader = runtime::package_runtime_files(
+            &camera
+                .targets()
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    files[&format!(
+                        "SD_ROOT/{}",
+                        runtime::core_path_of(index, camera.targets().len())
+                    )]
+                        .as_slice()
+                })
+                .collect::<Vec<_>>(),
+            runtime::icon_stride(camera.targets()[0]).unwrap(),
+        )[card_loader()]
+        .clone();
+        plain.insert(format!("SD_ROOT/{}", card_loader()), plain_loader);
+        validate_contents(&with_sums(plain)).unwrap();
+
+        // A fast-boot file of another camera, a missing install file, or
+        // another install file is refused.
+        let mut foreign = files.clone();
+        let other = if camera.id == "gr3" {
+            "F609160.BIN"
+        } else {
+            "F588210.BIN"
+        };
+        let release = runtime::FastRelease::of_path(&format!("SCRIPT/GRKIT/{other}")).unwrap();
+        foreign.insert(
+            format!("SD_ROOT/SCRIPT/GRKIT/{other}"),
+            testing::fast_file(&release),
+        );
+        assert!(validate_contents(&with_sums(foreign)).is_err());
+        let install = format!("SD_ROOT/SCRIPT/GRKIT/{}", installs[0]);
+        let mut no_install = files.clone();
+        no_install.remove(&install);
+        assert!(validate_contents(&with_sums(no_install)).is_err());
+        let mut changed = files.clone();
+        changed.get_mut(&install).unwrap()[0] ^= 1;
+        assert!(validate_contents(&with_sums(changed)).is_err());
+    }
+
+    // A fast-boot file must be that of its build, with its own path.
+    let mut files = gr3.files().clone();
+    let release = runtime::FastRelease::new(&camera::GR4, "1.11").unwrap();
+    files.insert(release.path(), testing::fast_file(&release));
+    assert!(load_runtime(&testing::manifest("gr3-2.10", &files), &files).is_err());
+    let mut files = gr3.files().clone();
+    let path = "SCRIPT/GRKIT/F588220.BIN";
+    let moved = files["SCRIPT/GRKIT/F588210.BIN"].clone();
+    files.insert(path.into(), moved);
+    assert!(load_runtime(&testing::manifest("gr3-2.10", &files), &files).is_err());
+}
+
+fn card_loader() -> &'static str {
+    grkit_core::card::LOADER_FILE
 }

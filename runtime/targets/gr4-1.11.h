@@ -88,6 +88,9 @@
 #define CHECK_LINE_VTABLE FIRMWARE(0x53e99d60)
 #define FW_CHECK_ITEM FIRMWARE(0x53585030)
 #define FW_LIST_INIT FIRMWARE(0x5357094c)
+/* Gives a list value to each of its rows; the ADJ list init passes 0x10.
+   GR III keeps it in the list, so it needs no call for added rows. */
+#define FW_LIST_ROWS_VALUE FIRMWARE(0x53571c34)
 #define FW_ROW_DOT FIRMWARE(0x5357ad40)
 #define CHECK_IMAGE_ON 0xfeU
 #define CHECK_IMAGE_OFF 0xfdU
@@ -126,6 +129,42 @@
    value) stores a u16 value. */
 #define FW_PLAYBACK_METADATA FIRMWARE(0x5323f67c)
 #define FW_IFD_SET_SHORT FIRMWARE(0x537e7148)
+/* DNG LONG tag element writer and native sensor rectangle helper. */
+#define FW_IFD_SET_LONG FIRMWARE(0x537e7160)
+#define FW_DNG_NATIVE_RECT FIRMWARE(0x5387e108)
+/* RawDevelopmentModel: the guard of its static instance, and the instance.
+   The family header gives its state (DEVELOP_STATE). */
+#define FW_DEVELOP_GUARD FIRMWARE(0x5508819c)
+#define FW_DEVELOP_MODEL FIRMWARE(0x550885b4)
+/* The time of the photo in the playback metadata (runtime/targets/gr4.h). */
+#define METADATA_TIME 0x3e0
+/* The EXIF Orientation of the photo in the playback metadata. */
+#define METADATA_ORIENTATION 0x2c4
+/* RAW development, the Image Control list (runtime/menu.c): the label and
+   the icon of an Image Control (model, category, value), the children of a
+   list row view (their maker and layout, a child, and the setups of the icon
+   and of the text). */
+#define FW_DEVELOP_TONE_TEXT FIRMWARE(0x53374314)
+#define FW_DEVELOP_TONE_ICON FIRMWARE(0x533742c8)
+/* RAW development, the Fn adjustments (runtime/develop.h): the category
+   and the values of the selected Image Control in RawDevelopmentModel,
+   and the parameter set of Standard (runtime/targets/gr3-2.10.h). */
+#define DEVELOP_CATEGORY 0x9c
+#define DEVELOP_VALUES 0x9d
+#define DEVELOP_PARAMETERS 0xb3
+/* RAW development, the aspect list (runtime/menu.c): the row value of the
+   model (model, row), the capture aspect of a development aspect (model,
+   value), and the label and the icon of a development aspect (model,
+   value). */
+#define FW_DEVELOP_ASPECT_VALUE FIRMWARE(0x5336b8c4)
+#define FW_DEVELOP_ASPECT_CAPTURE FIRMWARE(0x53375088)
+#define FW_DEVELOP_ASPECT_TEXT FIRMWARE(0x53375164)
+#define FW_DEVELOP_ASPECT_ICON FIRMWARE(0x53375120)
+#define FW_ROW_CHILDREN FIRMWARE(0x5357e7ec)
+#define DEVELOP_ROW_LAYOUT FIRMWARE(0x53d98ce8)
+#define FW_ROW_CHILD FIRMWARE(0x5357e398)
+#define FW_ICON_VIEW_STYLE FIRMWARE(0x53576ec8)
+#define FW_STRING_VIEW_STYLE FIRMWARE(0x5356d2c8)
 
 /* Picture processing: the YCbCr matrix calculation. */
 #define FW_YCBCR_CALC FIRMWARE(0x5391a650)

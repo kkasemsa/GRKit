@@ -23,11 +23,15 @@ import { sentences, type Language, type Strings } from '../i18n';
 import { forget, prefetchTable, preview, type PreviewEffect, type Source } from '../preview/render';
 import { DEFAULT_SAMPLE } from '../preview/samples';
 import { PhotoLoader } from '../preview/raw';
-import { resolveSelection, selectImport, type Selection } from '../selection';
+import { editable } from '../import/edit';
+import { missingNativeLooks } from '../import/native';
+import { importFit, resolveSelection, selectImport, type Selection } from '../selection';
 import { STOCKS } from '../stocks';
-import { EffectIcon } from './EffectIcon';
+import { CoverIcon, EffectIcon } from './EffectIcon';
 import { ErrorBoundary } from './ErrorBoundary';
+import { EditDialog, type EditDialogHandle } from './EditDialog';
 import { ImportDialog, type ImportDialogHandle } from './ImportDialog';
+import { NativeLookDialog, type NativeLookDialogHandle } from './NativeLookDialog';
 
 const DEFAULT_PREVIEW = 'portra-400-endura-v1';
 
@@ -41,20 +45,40 @@ interface Props {
   language: Language;
   selection: Selection;
   onSelectionChange: (selection: ReadonlySet<string>) => void;
-  /** The effects that this page fitted from LUTs, after the catalog effects. */
+  /** The effects that this page imported for the selected camera, after the catalog effects. */
   imported: readonly ImportedEffect[];
+  /** Adds an import, in place of an earlier one with the same ID. */
   onImport: (effect: ImportedEffect) => void;
+  /** The selected camera can use the native looks of GR IV, so the list offers to unlock them. */
+  nativeLooks: boolean;
   onRemove: (effect: ImportedEffect) => void;
+  /** Keeps an import with a new name or icon in its place. */
+  onEdit: (effect: ImportedEffect) => void;
   /** The effect files on the connected card that the catalog and the imports do not have. */
   cardEffects: readonly CardEffect[];
   /** The IDs of the effects on the connected card, or null without a card. */
   onCard: ReadonlySet<string> | null;
+  /** The IDs of the imports whose file on the card differs, such as after a new name. */
+  changedOnCard?: ReadonlySet<string>;
 }
 
 /** The change badge of an effect or a module: what a write to the card does with it. */
-export function ChangeBadge({ on, checked, strings: t }: { on: boolean; checked: boolean; strings: Strings }) {
+
+export function ChangeBadge({
+  on,
+  checked,
+  changed = false,
+  strings: t,
+}: {
+  on: boolean;
+  checked: boolean;
+  /** The file on the card differs from the effect of the page. */
+  changed?: boolean;
+  strings: Strings;
+}) {
   if (checked && !on) return <span className="change add">{t.changeAdds}</span>;
   if (!checked && on) return <span className="change remove">{t.changeRemoves}</span>;
+  if (checked && changed) return <span className="change add">{t.changeUpdates}</span>;
   return null;
 }
 
@@ -65,8 +89,11 @@ export function EffectsSection({
   imported,
   onImport,
   onRemove,
+  onEdit,
+  nativeLooks,
   cardEffects,
   onCard,
+  changedOnCard,
 }: Props) {
   const catalog = use(loadCatalog(PREVIEW_TARGET));
   const effects: readonly Effect[] = [...catalog.effects, ...imported];
@@ -76,6 +103,10 @@ export function EffectsSection({
     [...imported, ...cardEffects].map((effect) => effect.id),
   );
   const taken = new Set([...effects, ...cardEffects].map((effect) => effect.id));
+  // The count reads "of" the effects that a package can hold: each listed effect, up to the limit.
+  // With more listed effects than the limit, it also gives how many are listed.
+  const listed = effects.length + cardEffects.length;
+  const selectable = Math.min(listed, MAX_EFFECTS);
   // The effect that the frame shows, which changes in a transition when its preview is ready, and
   // the effect that the user selected last, which the tiles and the text show at once.
   const [previewId, setPreviewId] = useState(DEFAULT_PREVIEW);
@@ -83,6 +114,8 @@ export function EffectsSection({
   const [source, setSource] = useState<Source>(DEFAULT_SAMPLE);
   const photo = useRef<Source | null>(null);
   const importer = useRef<ImportDialogHandle>(null);
+  const unlocker = useRef<NativeLookDialogHandle>(null);
+  const editor = useRef<EditDialogHandle>(null);
   const [loader] = useState(() => new PhotoLoader());
   const [decoding, setDecoding] = useState(false);
   const ownPhoto = useCallback(
@@ -108,12 +141,21 @@ export function EffectsSection({
     baseline: effectUrl(catalog.target, catalog.baseline),
   });
   const previewed = shown ? previewOf(shown) : null;
-  // The target look of the selected effect: the catalog text, or the LUT and the fit of an import.
+  // The target look of the selected effect: the catalog text, the LUT and the fit of an import,
+  // or the firmware of a native look.
   const look = !requested
     ? ''
-    : requested.imported
-      ? `${requested.imported.source} · ${t.fitText[requested.imported.grade]}`
-      : (t.looks[requested.id] ?? requested.look);
+    : requested.imported?.kind === 'native'
+      ? t.nativeFrom(requested.imported.version)
+      : requested.imported?.kind === 'restored'
+        ? t.restoredFrom(requested.imported.source)
+        : requested.imported
+          ? `${requested.imported.source} · ${t.fitText[requested.imported.grade]}`
+          : (t.looks[requested.id] ?? requested.look);
+  // The native looks wait behind one locked row until they are on the page. The row opens
+  // to list them.
+  const locked = nativeLooks && catalog.baseGamma ? missingNativeLooks(imported) : [];
+  const [showLocked, setShowLocked] = useState(false);
   // What the frame waits for: a new photo, or the preview of the selected effect.
   const waiting = decoding ? t.decodingPhoto : isPending ? t.previewRendering(name) : null;
 
@@ -142,18 +184,32 @@ export function EffectsSection({
     preview(source, previewOf(effect)).catch(() => undefined);
   }
 
-  /** Adds an import and checks it if it fits closely and the package has room. Returns true
-   * when the package had no room. */
-  function importEffect(effect: ImportedEffect): boolean {
-    onImport(effect);
-    const { selection: next, full } = selectImport(checked, effect.id, effect.imported.grade);
+  /** Adds imports of one source and checks them if they follow it closely and the package has
+   * room. Returns true when the package had no room for one of them. */
+  function importEffects(effects: readonly ImportedEffect[]): boolean {
+    const first = effects[0];
+    if (!first) return false;
+    for (const effect of effects) onImport(effect);
+    const { selection: next, full } = selectImport(
+      checked,
+      effects.map((effect) => effect.id),
+      importFit(first.imported),
+    );
     if (next !== checked) onSelectionChange(next);
-    showEffect(effect);
+    showEffect(first);
     return full;
   }
 
   function openImport() {
     importer.current?.open();
+  }
+
+  /**
+   * Adds the imports of a GRKit.zip. The ones that the ZIP installs are checked again while the
+   * package has room, and the others wait for the user.
+   */
+  function openUnlock() {
+    unlocker.current?.open();
   }
 
   function showSample() {
@@ -281,19 +337,8 @@ export function EffectsSection({
               </button>
             )}
             <p className="note">
+              {/* The landing hero credits the sample photo where it first shows. */}
               {sentences(t.uploadNote, t.previewNote)}
-              {source === DEFAULT_SAMPLE && (
-                <>
-                  {' '}
-                  <a
-                    href="https://www.flickr.com/photos/cafetricot/51803682755/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {t.sampleCredit}
-                  </a>
-                </>
-              )}
             </p>
           </div>
         </div>
@@ -302,9 +347,10 @@ export function EffectsSection({
       <div className="effects-pick">
         <div className="toolbar">
           <p>
-            {t.count(MAX_EFFECTS)[0]}
+            {t.count(selectable)[0]}
             <span className="count">{checked.size}</span>
-            {t.count(MAX_EFFECTS)[1]}
+            {t.count(selectable)[1]}
+            {listed > MAX_EFFECTS && t.countTotal(listed)}
           </p>
           <div>
             <button
@@ -325,15 +371,18 @@ export function EffectsSection({
             </button>
           </div>
         </div>
-        {catalog.baseGamma && (
-          <p className="note">
-            {t.importHint}{' '}
-            <button type="button" className="link-button" onClick={openImport}>
-              {t.importOpen}
-            </button>
-          </p>
-        )}
-        {onCard && <p className="note">{t.effectsCardNote}</p>}
+        <div className="note-group">
+          <p className="note">{t.countLimit(MAX_EFFECTS)}</p>
+          {catalog.baseGamma && (
+            <p className="note">
+              {t.importHint}{' '}
+              <button type="button" className="link-button" onClick={openImport}>
+                {t.importOpen}
+              </button>
+            </p>
+          )}
+          {onCard && <p className="note">{t.effectsCardNote}</p>}
+        </div>
 
         <ul className="effects-list" aria-label={t.effects}>
           {[...effects, ...cardEffects].map((effect) => {
@@ -383,7 +432,24 @@ export function EffectsSection({
                     {body}
                   </button>
                 )}
-                {onCard && <ChangeBadge on={onCard.has(effect.id)} checked={isChecked} strings={t} />}
+                {onCard && (
+                  <ChangeBadge
+                    on={onCard.has(effect.id)}
+                    checked={isChecked}
+                    changed={changedOnCard?.has(effect.id)}
+                    strings={t}
+                  />
+                )}
+                {effect.imported && editable(effect) && (
+                  <button
+                    type="button"
+                    className="row-remove"
+                    aria-label={t.editOf(effect.name)}
+                    onClick={() => editor.current?.open(effect)}
+                  >
+                    {t.editEffect}
+                  </button>
+                )}
                 {effect.imported && (
                   <button
                     type="button"
@@ -397,6 +463,52 @@ export function EffectsSection({
               </li>
             );
           })}
+          {locked.length > 0 && (
+            <li className="effect-row native-row native-group">
+              <svg className="native-lock" viewBox="0 0 20 20" aria-hidden="true">
+                <rect x="4" y="9" width="12" height="9" rx="1.5" />
+                <path d="M7 9V6.5a3 3 0 0 1 6 0V9" />
+              </svg>
+              <button
+                type="button"
+                className="row-body"
+                aria-expanded={showLocked}
+                onClick={() => setShowLocked(!showLocked)}
+              >
+                <span className="native-stack" aria-hidden="true">
+                  {locked.slice(0, 3).map((look) => (
+                    <span key={look.id} className="native-stack-cover">
+                      <CoverIcon cover={look.cover} />
+                    </span>
+                  ))}
+                </span>
+                <span className="row-text">
+                  <span className="row-name">
+                    {t.nativeGroup} · {t.nativeCount(locked.length)}
+                  </span>
+                  <span className="row-meta">{t.nativeNeeds}</span>
+                </span>
+                <span className="native-chevron" aria-hidden="true" />
+              </button>
+              <button type="button" className="row-remove native-action" onClick={openUnlock}>
+                {t.nativeUnlock}
+              </button>
+            </li>
+          )}
+          {showLocked &&
+            locked.map((look) => (
+              <li key={look.id} className="effect-row native-row native-item">
+                <button
+                  type="button"
+                  className="row-body"
+                  aria-label={t.nativeUnlockOf(look.name)}
+                  onClick={openUnlock}
+                >
+                  <CoverIcon cover={look.cover} />
+                  <span className="row-name">{look.name}</span>
+                </button>
+              </li>
+            ))}
           {catalog.baseGamma && (
             <li className="effect-row import-row">
               <button type="button" className="row-body" onClick={openImport}>
@@ -414,7 +526,16 @@ export function EffectsSection({
             strings={t}
             baseGamma={catalog.baseGamma}
             taken={taken}
-            onImport={importEffect}
+            onImport={(effect) => importEffects([effect])}
+          />
+        )}
+        <EditDialog ref={editor} strings={t} onSave={onEdit} />
+        {nativeLooks && catalog.baseGamma && (
+          <NativeLookDialog
+            ref={unlocker}
+            strings={t}
+            baseGamma={catalog.baseGamma}
+            onImport={importEffects}
           />
         )}
       </div>
@@ -458,7 +579,7 @@ function PreviewFrame({
             <img src={result.processed} alt={`${originalAlt} — ${effectName}`} />
           </Item>
           <HandleRoot aria-label={compareLabel}>
-            <Handle buttonStyle={{ width: 44, height: 44 }} />
+            <Handle buttonStyle={{ width: 32, height: 32, gap: '0.2rem' }} />
           </HandleRoot>
         </Root>
       </Provider>

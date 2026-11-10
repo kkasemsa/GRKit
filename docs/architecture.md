@@ -19,7 +19,7 @@ This document describes the parts and the approach. The source code and its comm
 There are three execution domains:
 
 - Rust tools run on the developer computer or, through WebAssembly, in the browser.
-- The installer runs in the camera's Linux, started by an SD script. Only Linux can write the RTOS code region.
+- The installer runs in the camera's Linux, started by an SD script. On the official firmware, only Linux can write the RTOS code region. On the optional [fast-boot firmware](fastboot.md), the installer runs in the RTOS.
 - The hooks, the core, and the modules run in the camera's RTOS.
 
 The core is per target. It owns the firmware hooks, the state of each capability, and the hot paths. A module is the same file on each camera. It gives data, such as settings, pages, and text, and callbacks that the core calls. A module reaches the firmware only through the core.
@@ -56,11 +56,13 @@ At each power-on, a loader script in the RTOS waits until the camera mounts the 
 1. SCAN lists the modules and the effects and writes an allocation plan. A new package also copies its effects into the effects library. The loader allocates the arrays of the plan in the RTOS.
 2. INSTALL links the modules, writes the effect records and the icons, restores the saved settings, and installs the hooks last.
 
-The resident loader then saves the settings when they change.
+The resident loader then saves the settings when they change. Its resident part is a second script, `SCRIPT/GRKIT/RESIDENT.TTL`, which the loader includes after INSTALL: the interpreter reads a whole script before it runs it, so the start reads only the steps up to INSTALL.
 
 INSTALL changes nothing on a firmware that it does not expect. Each address must resolve in the running image, and each hook site must hold its stock instruction. Each hook belongs to one extension point, and INSTALL installs only the points that the loaded modules need. When a camera has several targets, its package holds the installer of each, and the installer of the running build runs.
 
-The loader writes `INSTALL.ERR` from the RTOS before each step and removes it after the install. So a start that stops leaves its step on the card. The scripts also write a boot log, `GRKIT/BOOT.TXT`, with the time of each step.
+On the optional [fast-boot firmware](fastboot.md), the loader runs SCAN and INSTALL on the RTOS side right after power-on, through the fast-boot files of the package. It falls back to Linux if that SCAN writes no plan.
+
+The loader writes `INSTALL.ERR` from the RTOS before each Linux step and removes it after the install. So a start that stops leaves its step on the card. The fast-boot steps write no file to the card: SCAN gives the plan header and INSTALL gives its status in the script array. The scripts also write a boot log, `GRKIT/BOOT.TXT`, with the time of each step.
 
 ### Card layout
 
@@ -93,6 +95,7 @@ Each feature is a module, `<ID>.GRM`, linked at power-on. The same file runs on 
 | `FRAMING` | a page of `CORE.ASPECT`, the mask, and the ratio label |
 | `GUIDES` | the guides |
 | `DATE` | the date imprint |
+| `GLOW` | independent Bloom and Halation around the highlights of each recorded picture |
 | `GRAIN` | a page of `CORE.GRAIN` and `CORE.GRAIN_SIZE` |
 
 The core keeps the value of each setting. The capabilities, `CORE.<KEY>`, are settings of the core. The core keeps each in a header word that its hooks read, so module code never runs in a hot path. INSTALL applies the patches of a capability only when a loaded module uses it.
@@ -112,14 +115,16 @@ GRKit adds an entry to the ADJ toolbar that lists the module pages. It reuses th
 
 ### GRKit section of MENU
 
-The Customize tab of MENU gets a GRKit section. It has a row for each module file, which turns the module on or off and opens its settings, **ADJ Order**, and **About GRKit**. The settings pages are native pages of the camera. A module that is off loads stopped: the core calls none of its code, so on applies at once. A page with options can turn each of its values, or each effect, on or off in ADJ.
+The Customize tab of MENU gets a GRKit section. It has **Enable GRKit**, a row for each module file, which turns the module on or off and opens its settings, **ADJ Order**, and **About GRKit**. This switch, which ADJ shows too, turns all modules off and on again and keeps the Enable of each. The settings pages are native pages of the camera. A module that is off loads stopped: the core calls none of its code, so on applies at once. A page with options can turn each of its values, or each effect, on or off in ADJ.
 
 The menu text follows the camera language.
 
 ## Pictures
 
 - **Film Look** (`CORE.TONE`) replaces the color matrix and tone curves of Standard for still pictures and the live view. It can also drive the camera's hue-sector stage. Each effect has its own Fn adjustments, kept apart from the native ones. The live-view highlight warning and histogram follow the white of the effect.
-- **Framing** (`CORE.ASPECT`) crops still pictures to a ratio. The live view stays 3:2 with a mask, and DNG files keep the full sensor data.
+- **Framing** (`CORE.ASPECT`) selects a ratio and sets the native aspect to 3:2. `CORE.ASPECT_MODE` selects Crop or Guides Only, with Crop as the default. Crop changes JPEG dimensions. Guides Only marks composition on the 3:2 live view without applying the selected crop. Off and changes to the mode preserve the current native aspect. A later change to another native aspect hides the composition frame.
+- **RAW default crop**: when Framing crops a shot, DNG defaults to native 3:2 and preserves the shot's digital crop setting. The DNG writer changes only `DefaultCropOrigin` and `DefaultCropSize`. The capture snapshot identifies the shot's Framing crop. Embedded previews keep the selected composition.
+- **Guides** follow the framing area in both Framing modes, so that they divide the frame that the photographer composes in. Without a framing area, they follow the native aspect ratio.
 - **Recorded pictures**: a hook on the JPEG encode changes the main picture, the screennail, and the thumbnail. It applies the selective color of the effect and the plane filters of the modules. Each shot keeps its own settings, so continuous shooting is correct. Grain uses the camera's grain stage, so the live view and DNG files have no grain.
 
 ## Relocation
@@ -138,7 +143,22 @@ If the code of a new firmware version moved only a little, the existing target r
 
 ## Code areas
 
-All private code is in the reservation after the RTOS image. GRKit changes no byte of the image except the hook sites and a few in-place patches. The builder rejects an overflow, a changed hook instruction, and overlapping patches.
+Private code uses the existing executable mapping after the RTOS image, below `0x55000000`. GRKit changes no other image bytes except hook sites and the listed instruction patches.
+
+The core components share this area without fixed partitions. The builder places Processing, Menu, and Framing in order, using each component's compiled size. Each component starts on a 256-byte boundary. The first 256 bytes after the tail base remain unused.
+
+```text
+RTOS image | page alignment | 256-byte gap | Processing | Menu | Framing | modules | free space
+                           ^ tail base                  (each start is aligned)             ^ 0x55000000
+```
+
+The aligned end of Framing determines the core span, `TAIL_BYTES`. Modules start immediately after that span. A larger component moves the following components and modules, without changing the module ABI or the executable mapping.
+
+At installation, relocation finds the running image's end and aligns the tail base to 4 KiB. The installer checks that the core and selected modules fit before writing their contents. It publishes code before enabling firmware hooks and keeps the existing cache synchronization.
+
+The builder rejects address overflow, overlapping patches, and changed hook instructions. `build.json` reports each component's address and size. Its `code_memory` section reports the core span and remaining executable capacity before modules load.
+
+The writable script tail, `GRKIT_TAIL_SIZE`, is separate. It holds image scratch buffers, text, and Toning curves in heap memory. Code growth does not change that allocation.
 
 ## Testing
 

@@ -1,9 +1,11 @@
 import type { ImportedEffect } from '../catalog';
 import { IMPORTS, run } from '../database';
 import { provideTable } from '../preview/render';
+import { isTone } from './names';
 
-// Keeps the effects that this page imported from LUTs in the browser, so a later visit has them
-// without a new import. Each call fails quietly, and the page works without it.
+// Keeps the effects that this page imported from LUTs and the native looks that it read from a
+// firmware file in the browser, so a later visit has them without a new import. Each call fails
+// quietly, and the page works without it.
 
 /** The start of each compiled effect (`grkit_core::effects::MAGIC`). */
 const MAGIC = 'GRFX0001';
@@ -13,21 +15,37 @@ interface Stored extends ImportedEffect {
   savedAt: number;
 }
 
-/** A stored import that this version of the page can use: the fields and a compiled effect. */
-function usable(value: unknown): value is Stored {
+/**
+ * A stored import that this version of the page can use, with the fields and a compiled effect,
+ * or null. Pages before the native looks stored LUT imports without `kind`, so a record without
+ * it is a LUT import. Older pages do not read a restored import, and leave it in the store.
+ */
+export function storedImport(value: unknown): Stored | null {
   const item = value as Partial<Stored> | null;
-  const imported = item?.imported;
-  return (
-    typeof item?.id === 'string' &&
-    typeof item.name === 'string' &&
-    typeof item.icon === 'string' &&
-    typeof item.preview === 'string' &&
-    !!item.cover &&
-    !!imported &&
-    imported.blob instanceof Uint8Array &&
-    imported.table instanceof Uint8Array &&
-    new TextDecoder().decode(imported.blob.subarray(0, MAGIC.length)) === MAGIC
-  );
+  const imported = item?.imported as Record<string, unknown> | undefined;
+  if (
+    typeof item?.id !== 'string' ||
+    typeof item.name !== 'string' ||
+    typeof item.icon !== 'string' ||
+    typeof item.preview !== 'string' ||
+    !imported ||
+    !(imported.blob instanceof Uint8Array) ||
+    !(imported.table instanceof Uint8Array) ||
+    new TextDecoder().decode(imported.blob.subarray(0, MAGIC.length)) !== MAGIC
+  ) {
+    return null;
+  }
+  const kind = imported.kind ?? 'lut';
+  if (kind !== 'lut' && kind !== 'native' && kind !== 'restored') return null;
+  if (kind === 'native' && typeof imported.version !== 'string') return null;
+  // A native look without valid tone curves stays, with no curves: it cannot go into a library.
+  if (kind === 'native' && imported.tone !== undefined && !isTone(imported.tone)) {
+    const { tone: _, ...rest } = imported;
+    return { ...item, imported: { ...rest, kind } } as Stored;
+  }
+  // A restored effect has the icon pixels of its file, and no cover fields.
+  if (kind === 'restored' ? typeof imported.source !== 'string' : !item.cover) return null;
+  return { ...item, imported: { ...imported, kind } } as Stored;
 }
 
 /**
@@ -36,7 +54,9 @@ function usable(value: unknown): value is Stored {
  */
 export async function loadImports(): Promise<ImportedEffect[]> {
   try {
-    const items = (await run(IMPORTS, 'readonly', (store) => store.getAll())).filter(usable);
+    const items = (await run(IMPORTS, 'readonly', (store) => store.getAll())).flatMap(
+      (value) => storedImport(value) ?? [],
+    );
     items.sort((a, b) => a.savedAt - b.savedAt);
     return items.map(({ savedAt: _, ...effect }) => {
       provideTable(effect.preview, effect.imported.table);
@@ -53,6 +73,22 @@ export async function saveImport(effect: ImportedEffect): Promise<void> {
     await run(IMPORTS, 'readwrite', (store) => store.put({ ...effect, savedAt: Date.now() } satisfies Stored));
   } catch (error) {
     console.warn('The imported effect cannot be kept in this browser.', error);
+  }
+}
+
+/** Keeps a changed import, such as a new name, in its place: with the time of its import. */
+export async function updateImport(effect: ImportedEffect): Promise<void> {
+  try {
+    await run(IMPORTS, 'readwrite', (store) => {
+      const request = store.get(effect.id);
+      request.onsuccess = () => {
+        const savedAt = storedImport(request.result)?.savedAt ?? Date.now();
+        store.put({ ...effect, savedAt } satisfies Stored);
+      };
+      return request;
+    });
+  } catch (error) {
+    console.warn('The changed effect cannot be kept in this browser.', error);
   }
 }
 

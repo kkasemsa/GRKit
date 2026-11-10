@@ -10,7 +10,7 @@
 use super::common::{self, join, len};
 use super::Family;
 use crate::components::{
-    b, bl, HookSpec,
+    b, bl, bl_shared, HookSpec,
     Part::{Framing, Menu, Processing},
     Point::{CaptureAspect, MenuPage, PipelineGrain, PipelineGrainSize, Tuning},
 };
@@ -32,6 +32,8 @@ const GROUPS: &[&[HookSpec]] = &[
     common::VIEWFINDER,
     LIVE_VIEW,
     common::PICTURE,
+    common::DEVELOP_TONE,
+    common::DEVELOP_ASPECT,
     GRAIN,
 ];
 
@@ -40,7 +42,8 @@ const GROUPS: &[&[HookSpec]] = &[
 /// record and MultiAxial set stores, the last packet field store, the
 /// custom-curve flag, and the BL to the curve getter.
 const PROCESSING: &[HookSpec] = &[
-    bl("module_parameters", Processing, Tuning),
+    // The shot ring records the capture crop even without Film Look.
+    bl_shared("module_parameters", Processing, Tuning, CaptureAspect),
     bl("module_processing", Processing, Tuning),
     bl("module_record", Processing, Tuning),
     bl("module_multiaxial", Processing, Tuning),
@@ -74,6 +77,7 @@ const GRAIN: &[HookSpec] = &[
     bl("grain_enable", Framing, PipelineGrain),
     bl("grain_strength", Framing, PipelineGrain),
     bl("grain_size", Framing, PipelineGrainSize),
-    bl("grain_gate", Framing, PipelineGrain),
+    // Film Look needs the gate for the Shading and Clarity of its effects.
+    bl_shared("grain_gate", Framing, PipelineGrain, Tuning),
     bl("grain_amplitude", Framing, PipelineGrain),
 ];

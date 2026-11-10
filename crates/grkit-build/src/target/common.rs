@@ -3,14 +3,15 @@
 //! installation order. Each build gives the site of each hook.
 
 use crate::components::{
-    b, bl, HookSpec,
+    b, b_shared, bl, bl_shared, HookSpec,
     Part::{Framing, Menu},
     Point::{CaptureAspect, MenuPage, PictureEncode, Tuning, ViewfinderOverlay},
 };
 
 /// AdjModeController: the touch thunks of the five slots, destroy, refresh,
-/// event, exit, and changed. Then the table loads of the text measure and
-/// draw.
+/// event, exit, changed, and the apply of the list value to the slot. Then
+/// the table loads of the text measure and draw, and the BL to the slot type
+/// in the periodic update, which shows the exposure box of ISO Setting.
 pub const ADJ: &[HookSpec] = &[
     b("menu_native_touch_0", Menu, MenuPage),
     b("menu_native_touch_1", Menu, MenuPage),
@@ -22,8 +23,10 @@ pub const ADJ: &[HookSpec] = &[
     b("menu_event", Menu, MenuPage),
     b("menu_exit", Menu, MenuPage),
     b("menu_changed", Menu, MenuPage),
+    b("menu_apply", Menu, MenuPage),
     b("menu_text_measure", Menu, MenuPage),
     b("menu_text_draw", Menu, MenuPage),
+    bl("menu_tick_type", Menu, MenuPage),
 ];
 
 /// The ADJ Image Control item apply, then the ImageControlController (MENU
@@ -150,6 +153,10 @@ pub const VIEWFINDER: &[HookSpec] = &[
 /// The recorded picture geometry, then the effect extension and picture
 /// processing.
 pub const PICTURE: &[HookSpec] = &[
+    // DNG-only DefaultCropOrigin and DefaultCropSize setters. JPEG output
+    // keeps the capture geometry; RAW defaults use native 3:2 for Framing.
+    bl("picture_dng_origin", Framing, CaptureAspect),
+    bl("picture_dng_size", Framing, CaptureAspect),
     // GetResolution id 2 heights (L, then each smaller size or crop step),
     // then the id 2 top insets of the screennail and the thumbnail.
     bl("framing_height_0", Framing, CaptureAspect),
@@ -171,6 +178,23 @@ pub const PICTURE: &[HookSpec] = &[
     // Playback size classifier and image aspect getter.
     bl("framing_classify", Framing, CaptureAspect),
     b("framing_image_aspect", Framing, CaptureAspect),
+    // RAW development of a DNG (RawDevelopmentModel): the BL that turns the
+    // recorded capture aspect into the initial development aspect, the BL
+    // that turns the development aspect into the capture aspect that the
+    // development sends to the pipeline, and the BL that does so for the
+    // size of the developed photo.
+    bl("framing_develop_aspect", Framing, CaptureAspect),
+    bl("framing_develop_push", Framing, CaptureAspect),
+    bl("framing_develop_size", Framing, CaptureAspect),
+    // Resize of a photo in playback: the end of the getter of its size, which
+    // the camera looks up in its resize size table, and the BL that stores a
+    // size of that table as a resize target.
+    bl("framing_resize_source", Framing, CaptureAspect),
+    bl("framing_resize_target", Framing, CaptureAspect),
+    // The entry of the aspect of an image size in playback edits (PlayDefs),
+    // from which the resize job takes the GetResolution size of its target
+    // and an edit the insets of its previews.
+    b("framing_play_aspect", Framing, CaptureAspect),
     // Effect extension and picture processing (`runtime/picture.*`), linked
     // into the Framing region. The live-view diff before the gamma stage
     // flag; the YCbCrMatrix Make call to its calc, which applies the
@@ -183,6 +207,15 @@ pub const PICTURE: &[HookSpec] = &[
     b("picture_encode_entry", Framing, PictureEncode),
     bl("picture_capture_tone", Framing, Tuning),
     bl("picture_capture_parameters", Framing, Tuning),
+    // The JPEG header setup of a write and of an in-camera rewrite: the BL to
+    // the APP1 Exif setup, after which the XMP segment with the name of the
+    // look goes before APP7.
+    bl("picture_jpeg_header", Framing, Tuning),
+    bl("picture_jpeg_rewrite", Framing, Tuning),
+    // RawDevelopmentModel: the BL that gives the initial Image Control of a
+    // development, where the development takes the effect of its DNG and
+    // develops its native aspect.
+    bl_shared("picture_develop_tone", Framing, Tuning, CaptureAspect),
     // ScreenDevice::OnSetLevelAlarm, which sets the live-view highlight
     // warning: the `mov r5, #0xfe00` of its threshold, and the `mov r1, r6`
     // before its tail call, where r4 is the screen and r6 the mode.
@@ -191,6 +224,47 @@ pub const PICTURE: &[HookSpec] = &[
     // LiveViewController's live-view histogram update: the BL to the copy of
     // the 256 luma bins into its 128 bins, which the histogram view draws.
     bl("framing_histogram", Framing, Tuning),
+];
+
+/// The Image Control list of a RAW development lists the effects after the
+/// native rows (`runtime/menu.c`). RawDevelopmentParameterSetController: the
+/// entries of its row count, of the row to category and to value of the
+/// model, of its row fill, of its current-row test, of the choice of a row,
+/// of its list setup, and of its Fn test; the BL to the model restore at
+/// Cancel; the BLs to the label of an Image Control in its subtitle and in
+/// the subtitle of RawDevelopmentTopController; and the BL to the icon of an
+/// Image Control in the row list of RawDevelopmentTopController.
+/// The row count, the row fill, the current-row test, and the list setup
+/// also serve the aspect list (`DEVELOP_ASPECT`).
+pub const DEVELOP_TONE: &[HookSpec] = &[
+    b_shared("menu_develop_count", Menu, Tuning, CaptureAspect),
+    b("menu_develop_category", Menu, Tuning),
+    b("menu_develop_value", Menu, Tuning),
+    b_shared("menu_develop_row", Menu, Tuning, CaptureAspect),
+    b_shared("menu_develop_current", Menu, Tuning, CaptureAspect),
+    b("menu_develop_decide", Menu, Tuning),
+    b_shared("menu_develop_open", Menu, Tuning, CaptureAspect),
+    b("menu_develop_fn", Menu, Tuning),
+    bl("menu_develop_restore", Menu, Tuning),
+    bl("menu_develop_list_text", Menu, Tuning),
+    bl("menu_develop_top_text", Menu, Tuning),
+    bl("menu_develop_top_icon", Menu, Tuning),
+];
+
+/// The aspect list of a RAW development lists the Framing ratios after the
+/// native rows (`runtime/menu.c`). The entries of the row to value of the
+/// model and of the choice of a row in RawDevelopmentParameterSetController;
+/// the BL to the model restore at Cancel; the BLs to the label of an aspect
+/// in its subtitle and in the subtitle of RawDevelopmentTopController; and
+/// the BL to the icon of an aspect in the row list of
+/// RawDevelopmentTopController.
+pub const DEVELOP_ASPECT: &[HookSpec] = &[
+    b("menu_develop_aspect_value", Menu, CaptureAspect),
+    b("menu_develop_aspect_decide", Menu, CaptureAspect),
+    bl("menu_develop_aspect_restore", Menu, CaptureAspect),
+    bl("menu_develop_aspect_list_text", Menu, CaptureAspect),
+    bl("menu_develop_aspect_top_text", Menu, CaptureAspect),
+    bl("menu_develop_aspect_top_icon", Menu, CaptureAspect),
 ];
 
 /// The number of hooks in `groups`.
@@ -218,6 +292,7 @@ pub const fn join<const N: usize>(groups: &[&[HookSpec]]) -> [HookSpec; N] {
                 symbol: hook.symbol,
                 part: hook.part,
                 point: hook.point,
+                also: hook.also,
                 link: hook.link,
             };
             count += 1;

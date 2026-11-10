@@ -28,6 +28,7 @@ pub const TARGET: Target = Target {
     pixel_base_slot: 0x55018734,
     pixel_base_indirect: false,
     native_tone_page: None,
+    model_record: None,
     layout: &LAYOUT,
     image_control: Some(&IMAGE_CONTROL),
     // The English entry is +4 in the language table, which the text hooks load.
@@ -49,7 +50,7 @@ pub const IMAGE_CONTROL: ImageControl = ImageControl {
 /// The tail after the decoded RTOS image (0x540b55c0).
 pub const LAYOUT: Layout = Layout {
     define: "-DGRKIT_TARGET_GR3_210",
-    tail: (0x540b6000, 0x540c2000),
+    tail: 0x540b6000,
     contexts: CONTEXTS,
     sites: SITES,
     instruction_patches: INSTRUCTION_PATCHES,
@@ -73,8 +74,10 @@ const SITES: &[Site] = &[
     ("menu_event", 0x531a4db8, "b030d1e1"),
     ("menu_exit", 0x531a3e88, "7022d0e5"),
     ("menu_changed", 0x531a4cfc, "0dc0a0e1"),
+    ("menu_apply", 0x531a3100, "0dc0a0e1"),
     ("menu_text_measure", 0x533966fc, "077193e7"),
     ("menu_text_draw", 0x53397108, "073193e7"),
+    ("menu_tick_type", 0x531a3fc4, "15faffeb"),
     ("menu_icon_width", 0x53209fb8, "9e3200e3"),
     ("menu_icon_height", 0x53209fec, "9e3200e3"),
     ("menu_icon_guard", 0x5320a7cc, "9e1200e3"),
@@ -160,6 +163,8 @@ const SITES: &[Site] = &[
     ("framing_canvas", 0x53391b14, "0dc0a0e1"),
     ("framing_children", 0x53391be0, "500800eb"),
     ("framing_capture_request_hook", 0x535423f4, "0010d4e5"),
+    ("picture_dng_origin", 0x535fb36c, "d9faffeb"),
+    ("picture_dng_size", 0x535fb424, "dffaffeb"),
     ("framing_height_0", 0x536a2e48, "d33ea0e3"),
     ("framing_height_1", 0x536a2e34, "a93ea0e3"),
     ("framing_height_2", 0x536a2e20, "763ea0e3"),
@@ -175,6 +180,19 @@ const SITES: &[Site] = &[
     ("framing_narrow_thumbnail", 0x536a306c, "b010c3e1"),
     ("framing_classify", 0x532b39b8, "0dfcffeb"),
     ("framing_image_aspect", 0x532b3cac, "50fbffea"),
+    // RawDevelopmentModel: the BL of the initial aspect for a capture aspect
+    // that GR III cannot develop, and the BL to ConvertToCommonPropertyAspectRatio
+    // before the aspect goes to the pipeline.
+    ("framing_develop_aspect", 0x53289b0c, "5ac7ffeb"),
+    ("framing_develop_push", 0x53289ff4, "a4ffffeb"),
+    ("framing_develop_size", 0x53289fac, "b6ffffeb"),
+    // ResizeModel: `mov r0, r4` at the end of the size getter (r4 the size),
+    // and the BL to the size setter in GetResizeResolution.
+    ("framing_resize_source", 0x532d6684, "0400a0e1"),
+    ("framing_resize_target", 0x532d5fb8, "557f0feb"),
+    // The entry of the PlayDefs aspect of an image size (PlayJobEditResize,
+    // PlaybackEditProcess::ConvertToAspectRatio).
+    ("framing_play_aspect", 0x534a2874, "0dc0a0e1"),
     ("module_gamma_dirty", 0x536de1a8, "0e30d4e5"),
     ("picture_post", 0x536e4774, "e9ffffeb"),
     ("picture_encode_entry", 0x535047d4, "0dc0a0e1"),
@@ -182,10 +200,46 @@ const SITES: &[Site] = &[
     // the BL to the adjustments fill of tag 0x247 (handler 0x536078e8).
     ("picture_capture_tone", 0x53608080, "e1fdfeeb"),
     ("picture_capture_parameters", 0x536078f4, "3302ffeb"),
+    // The JPEG header setup (0x53603844 for a write, 0x53603aa4 for a rewrite):
+    // the BL to the APP1 Exif setup (0x536036a8), which sets the APP7 offset
+    // at writer +0x48.
+    ("picture_jpeg_header", 0x53603898, "82ffffeb"),
+    ("picture_jpeg_rewrite", 0x53603af0, "ecfeffeb"),
+    // RawDevelopmentModel: the BL to the Image Control conversion of the start.
+    ("picture_develop_tone", 0x53289bc8, "63fcffeb"),
     ("framing_level_threshold", 0x536ce194, "fe5ca0e3"),
     ("framing_level_mode", 0x536ce080, "0610a0e1"),
     // LiveViewController histogram update: the BL to the 256-to-128 bin copy.
     ("framing_histogram", 0x53170c28, "c5ed0feb"),
+    // The Image Control list of a RAW development: the entries of
+    // GetListItemCount, the row category and value of RawDevelopmentModel, the
+    // row fill, IsCurrentValue, the Image Control choice, SetupScrollListView,
+    // and the Fn test; the BL to the model restore in Restore; the BLs to the
+    // Image Control label in UpdateSubTitle of the list and of
+    // RawDevelopmentTopController; the BL to the Image Control icon of its rows.
+    ("menu_develop_count", 0x53189ca0, "0dc0a0e1"),
+    ("menu_develop_category", 0x532834d0, "0530d0e5"),
+    ("menu_develop_value", 0x532834f0, "0dc0a0e1"),
+    ("menu_develop_row", 0x5318a480, "0dc0a0e1"),
+    ("menu_develop_current", 0x5318abe0, "0dc0a0e1"),
+    ("menu_develop_decide", 0x5318a6d0, "0dc0a0e1"),
+    ("menu_develop_open", 0x5318b524, "0dc0a0e1"),
+    ("menu_develop_fn", 0x5318b0e8, "0dc0a0e1"),
+    ("menu_develop_restore", 0x5318add4, "4ef903eb"),
+    ("menu_develop_list_text", 0x5318b460, "63f703eb"),
+    ("menu_develop_top_text", 0x53186778, "9d0a04eb"),
+    ("menu_develop_top_icon", 0x531869c8, "f60904eb"),
+    // The aspect list of a RAW development: the entries of the row value of
+    // RawDevelopmentModel and of the aspect choice; the BL to the model
+    // restore in Restore; the BLs to the aspect label in UpdateSubTitle of the
+    // list and of RawDevelopmentTopController; the BL to the aspect icon of its
+    // rows.
+    ("menu_develop_aspect_value", 0x532833e4, "0530d0e5"),
+    ("menu_develop_aspect_decide", 0x5318a61c, "0dc0a0e1"),
+    ("menu_develop_aspect_restore", 0x5318ada4, "9efc03eb"),
+    ("menu_develop_aspect_list_text", 0x5318b3f4, "cffa03eb"),
+    ("menu_develop_aspect_top_text", 0x531867c0, "dc0d04eb"),
+    ("menu_develop_aspect_top_icon", 0x53186a1c, "360d04eb"),
     // DigitalFilterProcess SetEffectParameter (0x5350304c), and its stage
     // gate (0x535131c0, plan +0x24).
     ("grain_particle", 0x535031b0, "9537d5e5"),
@@ -194,6 +248,9 @@ const SITES: &[Site] = &[
     ("grain_fill", 0x5367ae14, "c43e00eb"),
     // The granulation (0x5367ad3c): the first test of its amplitude choice.
     ("grain_amplitude", 0x5367ae28, "020055e3"),
+    ("menu_parameter_get_9", 0x532c295c, "0dc0a0e1"),
+    ("menu_parameter_set_9", 0x532c0700, "0dc0a0e1"),
+    ("menu_parameter_row_9", 0x532ac9a4, "f9750aeb"),
 ];
 
 const CONTEXTS: &[(u32, &str)] = &[

@@ -7,7 +7,10 @@
 //! uses its setting. The resident loader saves the value as the state key
 //! `CORE.<KEY>`, and restores it only while a loaded module uses it.
 
-use crate::abi::{HOST_FRAME_RATIO, HOST_GRAIN, HOST_GRAIN_SIZE};
+use crate::abi::{
+    HOST_ADJ_OPEN, HOST_ASPECT_MODE, HOST_FRAME_RATIO, HOST_GRAIN, HOST_GRAIN_SIZE, HOST_MODULE,
+    MODULES_MAX,
+};
 
 /// An extension point: the firmware changes that a group of features needs.
 /// The installer applies the patches of a point only when a loaded module
@@ -98,7 +101,7 @@ impl Capability {
 }
 
 /// The capabilities in handle order.
-pub const CAPABILITIES: [Capability; 4] = [
+pub const CAPABILITIES: [Capability; 7] = [
     Capability {
         // The effect of still pictures and the live view: 0 Off, then effect
         // n - 1 of the installed effects (runtime/tone.h). The core gives
@@ -110,11 +113,10 @@ pub const CAPABILITIES: [Capability; 4] = [
         points: &[Point::Tuning, Point::PictureEncode],
     },
     Capability {
-        // The aspect of still pictures (runtime/aspect.h): 0 native 3:2, then
+        // The composition ratio (runtime/aspect.h): 0 Off, then
         // XPan 65:24, 16:9, 4:3, 2.35:1, 1:1, 5:4, 7:6. Each target offers some of
-        // them. The value comes from the native aspect and the crop, and the
-        // word holds the crop. The overlay keeps the live view of a crop in
-        // sync with the capture.
+        // them. The word keeps the selection; ASPECT_MODE determines whether
+        // it changes the capture area or only the composition frame.
         key: "ASPECT",
         values: 8,
         state: State::Word(HOST_FRAME_RATIO),
@@ -136,6 +138,31 @@ pub const CAPABILITIES: [Capability; 4] = [
         values: 4,
         state: State::Word(HOST_GRAIN_SIZE),
         points: &[Point::PipelineGrainSize],
+    },
+    Capability {
+        // Keep the existing capture behavior when this setting is absent or
+        // zero. Guides-only preserves the native aspect and file geometry.
+        key: "ASPECT_MODE",
+        values: 2,
+        state: State::Word(HOST_ASPECT_MODE),
+        points: &[Point::ViewfinderOverlay, Point::CaptureAspect],
+    },
+    Capability {
+        // 1 when ADJ should open on GRKit after the next power-on, 0 for a
+        // native entry. No firmware patches: INSTALL always restores it
+        // (runtime/installer.c), and menu_exit writes it (runtime/menu.c).
+        key: "ADJ",
+        values: 2,
+        state: State::Word(HOST_ADJ_OPEN),
+        points: &[],
+    },
+    Capability {
+        // The module of the GRKit root row where the next ADJ session opens
+        // (HOST_MODULE). No firmware patches: INSTALL always restores it.
+        key: "ADJ_MODULE",
+        values: MODULES_MAX as u32,
+        state: State::Word(HOST_MODULE),
+        points: &[],
     },
 ];
 

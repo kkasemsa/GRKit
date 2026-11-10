@@ -1,15 +1,18 @@
 #ifndef GRKIT_INSTALL_MODULES_H
 #define GRKIT_INSTALL_MODULES_H
+_Static_assert(MANAGE_COLOR_ONLY == GRM_COLOR_ONLY, "MENU knows the status of a color-only module");
 /* A part of the installer: the link of the modules and the module array.
    installer.c includes it once, in its order, after the helpers and the state
    that this part uses. */
-/* The header entries of the module pages and layers (runtime/abi.h): three
-   words each. Layers stay in painting order. */
+/* The header entries of the module pages (runtime/abi.h): three words. */
 static u32 module_pages[GRKIT_MODULE_PAGES_MAX * 3], module_page_count;
 /* The plane filters in stage order (GRKIT_HOST_MODULE_FILTERS), two words
    each. */
 static u32 module_filters[GRKIT_MODULE_FILTERS_MAX * 2], module_filter_count;
-static u32 module_layers[GRKIT_MODULE_LAYERS_MAX * 3], module_layer_count;
+static u32 module_layers[GRKIT_MODULE_LAYERS_MAX * 4], module_layer_count;
+/* Descriptor and tile-base pairs, in module and declaration order. */
+static u32 module_indicators[GRKIT_INDICATORS_MAX * 2], module_indicator_count;
+static u32 module_status_icons, module_native_slots, module_legacy_tone_owner;
 static u8 module_code[GRM_MAX_SEGMENT], module_data[GRM_MAX_SEGMENT];
 /* Insert the `width`-word `entry` into `table`, which holds `*count` entries
    in the order of the high half of their word `key`: after the entries whose
@@ -43,6 +46,49 @@ static u32 setting_module(u32 k)
         if ((module_usable >> m & 1) && k - module_first[m] < module_settings[m]) return m;
     return GRKIT_MODULES_MAX;
 }
+/* Validate the resolved setting of an icon before copying module code. */
+_Static_assert(GRM_LABELS == GRKIT_LABEL_COUNT, "Module label icons name the core labels");
+static int module_icon_valid(u32 i, const u32 *uses, u32 base, u32 address, u32 tile_count)
+{
+    const u8 *icon = grm_code_at(&module, module_code, base, address, GRM_ICON);
+    u32 kind = grm_word(icon + GRM_ICON_KIND_AT), named = grm_word(icon + GRM_ICON_SETTING_AT);
+    u32 handle = module_handle(i, uses, named), first = grm_word(icon + GRM_ICON_FIRST_TILE_AT);
+    if (kind == GRM_ICON_TONE) return handle == GRKIT_CORE_TONE;
+    if (named == GRM_NO_SETTING || handle == GRM_NO_SETTING) return 1;
+    u32 values = handle == GRKIT_CORE_TONE ? count + 1 : handle_values(handle);
+    /* A label needs one core label for each value of its setting. */
+    if (kind == GRM_ICON_LABEL) return values && first < GRKIT_LABEL_COUNT && values <= GRKIT_LABEL_COUNT - first;
+    return values && first < tile_count && values <= tile_count - first;
+}
+/* Validate and relocate shared enabled conditions from the unpatched copy. */
+static int module_conditions_valid(u32 i, const u32 *uses, u32 base, u32 address, u32 n)
+{
+    const u8 *conditions = grm_code_at(&module, module_code, base, address, n * GRM_CONDITION);
+    for (u32 r = 0; r < n; ++r) {
+        const u8 *c = conditions + r * GRM_CONDITION;
+        u32 handle = module_handle(i, uses, grm_word(c));
+        if (handle == GRM_NO_SETTING) continue;
+        u32 values = handle == GRKIT_CORE_TONE ? count + 1 : handle_values(handle);
+        if (grm_word(c + GRM_CONDITION_VALUE_AT) >= values) return 0;
+    }
+    return 1;
+}
+static void module_conditions_patch(u32 i, const u32 *uses, u32 base, u32 address, u32 n)
+{
+    const u8 *conditions = grm_code_at(&module, module_code, base, address, n * GRM_CONDITION);
+    for (u32 r = 0; r < n; ++r)
+        store(address + r * GRM_CONDITION, module_handle(i, uses, grm_word(conditions + r * GRM_CONDITION)));
+}
+/* Read references from the unpatched copy, so shared icon descriptors and
+   shared condition arrays can be patched more than once safely. */
+static void module_icon_patch(u32 i, const u32 *uses, u32 base, u32 address)
+{
+    const u8 *icon = grm_code_at(&module, module_code, base, address, GRM_ICON);
+    u32 named = grm_word(icon + GRM_ICON_SETTING_AT), handle = module_handle(i, uses, named);
+    store(address + GRM_ICON_SETTING_AT, handle);
+    if (named != GRM_NO_SETTING && handle == GRM_NO_SETTING) store(address + GRM_ICON_KIND_AT, 0);
+}
+
 /* One pass of install_modules. The modules of `broken` failed in an earlier
    pass: they keep their status and their memory, and their settings are
    missing. */
@@ -61,7 +107,7 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
        setting with the same ID is not saved. The choices of the GRKit
        section, those of the effects, and the kept values follow the settings
        of the modules. */
-    u32 choices = MANAGE_PER_MODULE * module_count + listed_count, total = setting_total + choices + kept_count;
+    u32 choices = CHOICE_ENTRIES(module_count, listed_count), total = setting_total + choices + kept_count;
     store(array, total);
     store(array + 4, 0);
     for (u32 k = 0; k < setting_total; ++k) {
@@ -75,7 +121,7 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
                 }
         }
         store(entry, id);
-        store(entry + 4, 0);
+        store(entry + 4, setting_defaults[k]);
         store(entry + 8, setting_values[k]);
     }
     for (u32 i = 0; i < module_count; ++i) {
@@ -96,6 +142,14 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
         store(entry + 4, listed_choice[i]);
         store(entry + 8, EFFECT_CHOICE_VALUES);
     }
+    /* The GRKit switch follows the choices of the effects. */
+    u32 switch_handle = setting_total + choices - 1;
+    {
+        u32 entry = array + 4 * SETTINGS_ENTRY(switch_handle);
+        store(entry, grm_state_id(MANAGE_SWITCH_KEY));
+        store(entry + 4, all_off);
+        store(entry + 8, 2);
+    }
     for (u32 k = 0; k < kept_count; ++k) {
         u32 entry = array + 4 * SETTINGS_ENTRY(setting_total + choices + k);
         store(entry, kept_ids[k]);
@@ -113,6 +167,10 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
     services_block = services;
     if (!sync_alias(array, list_at - array)) return STATUS_SYNC;
     module_page_count = module_layer_count = module_filter_count = capabilities_used = capabilities_running = 0;
+    module_indicator_count = module_status_icons = module_native_slots = module_legacy_tone_owner = 0;
+    /* A color-only module does not load on a monochrome camera, and the
+       rows of a color-only setting do not show there. */
+    int monochrome = monochrome_camera();
     for (u32 i = 0; i < module_count; ++i) {
         if (!(module_usable >> i & 1) || read_module(i)) continue;
         u32 context = context_at, code_base = code_at, data_base = data_at, data_bytes = module.data_size + module.bss_size;
@@ -127,7 +185,8 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
         struct grm_layer layers[GRM_REGISTRATIONS];
         struct grm_page pages[GRM_REGISTRATIONS];
         struct grm_filter filters[GRM_REGISTRATIONS];
-        u32 filter_count = 0;
+        u32 filter_count = 0, indicator_count = 0, status_icons = 0, native_slots = 0;
+        u32 indicators[GRM_REGISTRATIONS];
         const u8 *tiles = 0;
         int status = 0;
         /* The context: its first setting, their count, reserved, then the
@@ -162,6 +221,10 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
         }
         if (!sync_alias(context, 4 * CONTEXT_WORDS(module_use_count[i]))) return STATUS_SYNC;
         symbols[self].value = context;
+        u32 module_flags = 0;
+        /* The file itself: module_code gets the code of this module at its link. */
+        if (!status) status = grm_module_flags(&module, module.code, &module_flags);
+        if (!status && monochrome && (module_flags & GRM_MODULE_COLOR_ONLY)) status = GRM_COLOR_ONLY;
         if (!status) status = grm_link(&module, module_code, module_data, code_base, data_base, symbols, n, &failed);
         if (!status) status = grm_settings(&module, module_code, code_base, own, &own_count, own_names, &own_uses);
         if (!status) status = grm_tiles(&module, module_code, code_base, &tiles, &tile_count);
@@ -169,6 +232,25 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
             status = grm_registrations(&module, module_code, code_base, own, own_count, own_uses,
                                        layers, &layer_count, pages, &page_count, filters, &filter_count,
                                        GRM_REGISTRATIONS);
+        if (!status) indicator_count = grm_indicators(&module, module_code, code_base, indicators);
+        for (u32 k = 0; !status && k < indicator_count; ++k) {
+            const u8 *p = grm_code_at(&module, module_code, code_base, indicators[k], GRM_INDICATOR);
+            u32 placement = grm_word(p + GRM_INDICATOR_PLACEMENT_AT);
+            if (placement == GRM_INDICATOR_STATUS_ROW) ++status_icons;
+            else {
+                u32 bit = 1U << grm_word(p + GRM_INDICATOR_SLOT_AT);
+                if ((native_slots | module_native_slots) & bit) {
+                    print("GR_MODULE_SLOT_CONFLICT "); print(module.id); print(" image_control\n");
+                    status = GRM_BAD_DESCRIPTOR;
+                }
+                native_slots |= bit;
+            }
+            u32 n = grm_word(p + GRM_INDICATOR_CONDITION_COUNT_AT);
+            if (!module_conditions_valid(i, use_handles, code_base, grm_word(p + GRM_INDICATOR_CONDITIONS_AT), n))
+                status = GRM_BAD_DESCRIPTOR;
+            if (!module_icon_valid(i, use_handles, code_base, grm_word(p + GRM_INDICATOR_ICON_AT), tile_count))
+                status = GRM_BAD_DESCRIPTOR;
+        }
         /* The handles of the pages and the layers. A page or a layer of an
            optional used setting that no module has is not registered. A
            page needs a row for each value of a used setting. */
@@ -183,6 +265,10 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
             /* A settings row of a used setting needs a value text for each
                value of that setting. */
             const u8 *page = grm_code_at(&module, module_code, code_base, pages[k].address, GRM_PAGE);
+            if (grm_word(page) >= GRM_PAGE_ICON) {
+                u32 icon = grm_word(page + GRM_PAGE_ICON_AT);
+                if (icon && !module_icon_valid(i, use_handles, code_base, icon, tile_count)) status = GRM_BAD_DESCRIPTOR;
+            }
             u32 rows = page ? grm_word(page + GRM_PAGE_SETTING_ROWS_AT) : 0;
             const u8 *list = rows ? grm_code_at(&module, module_code, code_base, grm_word(page + GRM_PAGE_SETTINGS_AT), rows * GRM_ROW) : 0;
             for (u32 r = 1; !status && list && r < rows; ++r) {
@@ -195,18 +281,28 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
                     status = GRM_BAD_DESCRIPTOR;
             }
         }
-        for (u32 k = 0; !status && k < layer_count; ++k)
+        for (u32 k = 0; !status && k < page_count; ++k)
+            if ((pages[k].flags & GRM_PAGE_MENU_ONLY) && pages[k].setting == GRM_NO_SETTING) status = GRM_MISSING_SETTING;
+        for (u32 k = 0; !status && k < layer_count; ++k) {
             if (layers[k].setting != GRM_NO_SETTING) {
                 layers[k].setting = module_handle(i, use_handles, layers[k].setting);
                 if (layers[k].setting == GRM_NO_SETTING) layers[k].paint = 0;
             }
+            if (layers[k].descriptor) {
+                const u8 *p = grm_code_at(&module, module_code, code_base, layers[k].descriptor, GRM_LAYER_CONDITIONAL);
+                if (!module_conditions_valid(i, use_handles, code_base, grm_word(p + GRM_LAYER_CONDITIONS_AT),
+                                             grm_word(p + GRM_LAYER_CONDITION_COUNT_AT))) status = GRM_BAD_DESCRIPTOR;
+            }
+        }
         for (u32 k = 0; !status && k < filter_count; ++k) {
             filters[k].setting = module_handle(i, use_handles, filters[k].setting);
             if (filters[k].setting == GRM_NO_SETTING) filters[k].apply = 0;
         }
         if (!status && (module_layer_count + layer_count > GRKIT_MODULE_LAYERS_MAX ||
                         module_page_count + page_count > GRKIT_MODULE_PAGES_MAX ||
-                        module_filter_count + filter_count > GRKIT_MODULE_FILTERS_MAX)) status = GRM_NO_ROOM;
+                        module_filter_count + filter_count > GRKIT_MODULE_FILTERS_MAX ||
+                        module_indicator_count + indicator_count > GRKIT_INDICATORS_MAX ||
+                        module_status_icons + status_icons > GRKIT_STATUS_ICONS_MAX)) status = GRM_NO_ROOM;
         if (status) {
             module_status[i] = (u32)status;
             module_needs[i] = 0;
@@ -219,10 +315,35 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
             continue;
         }
         copy(at(code_base), module_code, module.code_size);
+        for (u32 k = 0; k < layer_count; ++k) if (layers[k].descriptor) {
+            const u8 *p = grm_code_at(&module, module_code, code_base, layers[k].descriptor, GRM_LAYER_CONDITIONAL);
+            module_conditions_patch(i, use_handles, code_base, grm_word(p + GRM_LAYER_CONDITIONS_AT),
+                                    grm_word(p + GRM_LAYER_CONDITION_COUNT_AT));
+        }
+        for (u32 k = 0; k < indicator_count; ++k) {
+            const u8 *p = grm_code_at(&module, module_code, code_base, indicators[k], GRM_INDICATOR);
+            u32 n = grm_word(p + GRM_INDICATOR_CONDITION_COUNT_AT), address = grm_word(p + GRM_INDICATOR_CONDITIONS_AT);
+            module_conditions_patch(i, use_handles, code_base, address, n);
+            module_icon_patch(i, use_handles, code_base, grm_word(p + GRM_INDICATOR_ICON_AT));
+        }
+        for (u32 k = 0; k < page_count; ++k) {
+            const u8 *p = grm_code_at(&module, module_code, code_base, pages[k].address, GRM_PAGE);
+            if (grm_word(p) >= GRM_PAGE_ICON && grm_word(p + GRM_PAGE_ICON_AT))
+                module_icon_patch(i, use_handles, code_base, grm_word(p + GRM_PAGE_ICON_AT));
+            /* The Fn setting of a row gets its absolute handle. Without the
+               setting of an optional use, or with fewer than two values, Fn
+               on that row opens the settings as on the other rows. */
+            if (grm_word(p) >= GRM_PAGE_FN && grm_word(p + GRM_PAGE_FN_VALUE_AT)) {
+                u32 handle = module_handle(i, use_handles, grm_word(p + GRM_PAGE_FN_SETTING_AT));
+                if (handle == GRM_NO_SETTING || handle_values(handle) < 2) store(pages[k].address + GRM_PAGE_FN_VALUE_AT, 0);
+                else store(pages[k].address + GRM_PAGE_FN_SETTING_AT, handle);
+            }
+        }
         /* The native settings rows of each page get absolute setting handles
            (runtime/modules.h): row 0 the page setting, the others settings of
            the module or used settings. A row of an optional used setting
-           that no module has is left out, and the rows after it move up. */
+           that no module has is left out, and so is a row of a color-only
+           setting on a monochrome camera. The rows after it move up. */
         for (u32 k = 0; k < page_count; ++k) {
             u32 rows = word(pages[k].address + GRM_PAGE_SETTING_ROWS_AT), list = word(pages[k].address + GRM_PAGE_SETTINGS_AT), kept = 0;
             if (pages[k].setting == GRM_NO_SETTING) continue;
@@ -230,6 +351,7 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
                 u32 row = list + r * GRM_ROW, to = list + kept * GRM_ROW;
                 u32 handle = r ? module_handle(i, use_handles, word(row + GRM_ROW_SETTING_AT)) : pages[k].setting;
                 if (handle == GRM_NO_SETTING) continue;
+                if (r && monochrome && handle < setting_total && (setting_flags[handle] & GRM_SETTING_COLOR_ONLY)) continue;
                 for (u32 w = 0; to != row && w < GRM_ROW; w += 4) store(to + w, word(row + w));
                 store(to + GRM_ROW_SETTING_AT, handle);
                 ++kept;
@@ -254,18 +376,19 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
         /* The pages in load order, and the layers in painting order: a
            layer goes after the layers with the same or a lower order. */
         for (u32 k = 0; k < page_count; ++k) {
-            if (pages[k].setting == GRM_NO_SETTING) continue;
+            if (pages[k].setting == GRM_NO_SETTING && word(pages[k].address + GRM_PAGE_KIND_AT) != GRM_PAGE_GROUP) continue;
             module_pages[module_page_count * 3] = pages[k].address;
             module_pages[module_page_count * 3 + 1] = pages[k].setting;
-            module_pages[module_page_count * 3 + 2] = module_tile_first[i];
+            /* A module without tiles has no tile 0 for its root row. */
+            module_pages[module_page_count * 3 + 2] = tile_count ? module_tile_first[i] : MANAGE_NO_TILE;
             ++module_page_count;
             points |= POINT_MENU_PAGE;
         }
         for (u32 k = 0; k < layer_count; ++k) {
             if (!layers[k].paint) continue;
             points |= POINT_VIEWFINDER_OVERLAY;
-            const u32 entry[3] = {layers[k].paint, layers[k].setting, layers[k].order << 16 | layers[k].flags};
-            insert_sorted(module_layers, &module_layer_count, 3, 2, entry);
+            const u32 entry[4] = {layers[k].paint, layers[k].setting, layers[k].order << 16 | layers[k].flags, layers[k].descriptor};
+            insert_sorted(module_layers, &module_layer_count, 4, 2, entry);
         }
         /* The filters in stage order: a filter goes after the filters of the
            same or a lower stage. */
@@ -275,6 +398,15 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
             const u32 entry[2] = {filters[k].apply, filters[k].stage << 16 | filters[k].setting};
             insert_sorted(module_filters, &module_filter_count, 2, 1, entry);
         }
+        for (u32 k = 0; k < indicator_count; ++k) {
+            module_indicators[module_indicator_count * 2] = indicators[k];
+            module_indicators[module_indicator_count * 2 + 1] = tile_count ? module_tile_first[i] : MANAGE_NO_TILE;
+            ++module_indicator_count;
+        }
+        module_status_icons += status_icons;
+        module_native_slots |= native_slots;
+        if (indicator_count) points |= POINT_VIEWFINDER_OVERLAY;
+        if (native_slots) points |= core_setting_points[CORE_SETTING(GRKIT_CORE_TONE)];
         /* The event subscriber: SYSTEM_READY needs the hook of the
            shooting screen. */
         struct grm_subscriber subscriber;
@@ -285,13 +417,15 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
             store(services + SERVICES_SUBSCRIBER_COUNT, ++subscribers);
             if (subscriber.events & SERVICE_EVENT_SYSTEM_READY) points |= POINT_VIEWFINDER_OVERLAY;
         }
+        if ((module.abi & 0xffffU) < 2 && (capabilities & GRKIT_CORE_TONE_BIT) && !module_legacy_tone_owner)
+            module_legacy_tone_owner = code_base;
         /* The patches of the used capabilities and of the menu. */
         needed_points |= points;
         capabilities_used |= capabilities;
         module_code_from[i] = code_base;
         module_code_to[i] = code_base + module.code_size;
         module_capabilities[i] = capabilities;
-        if (!module_off[i]) capabilities_running |= capabilities;
+        if (!module_stopped(i)) capabilities_running |= capabilities;
         print("GR_MODULE_LOADED "); print(module.id); print(" "); number(code_base); print("\n");
     }
     /* The module list of the Modules page. */
@@ -300,6 +434,7 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
     store(list_at + MANAGE_SETTINGS, setting_total);
     store(list_at + MANAGE_FLAGS, safe_mode ? MANAGE_SAFE_MODE : 0);
     store(list_at + MANAGE_OPEN, 0);
+    store(list_at + MANAGE_SWITCH, switch_handle + 1);
     for (u32 i = 0; i < module_count; ++i) {
         u32 entry = list_at + MANAGE_HEADER + i * MANAGE_STRIDE, n = 0;
         volatile u16 *name = (volatile u16 *)at(entry + MANAGE_NAME);
@@ -329,7 +464,7 @@ static int install_pass(u32 code, u32 array, u32 pixels, const u32 *icon_bases, 
     {
         u32 stopped = 0;
         for (u32 i = 0; i < module_count && stopped < SERVICES_SUSPENDED_MAX; ++i) {
-            if (module_status[i] || !module_off[i]) continue;
+            if (module_status[i] || !module_stopped(i)) continue;
             store(services + SERVICES_SUSPENDED + 4 + 8 * stopped, module_code_from[i]);
             store(services + SERVICES_SUSPENDED + 8 + 8 * stopped, module_code_to[i]);
             ++stopped;

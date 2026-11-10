@@ -8,8 +8,8 @@ static const Recipe recipes[RECIPE_COUNT] = {
     {"portra-800-push2-v1", "PORTRA 800 +2", 4, 0, RECIPE_NO_ASPECT, 0},
     {"ektar-100-edge-v1", "EKTAR 100", 3, 1, RECIPE_NO_ASPECT, 0},
     {"gold-200-premier-v1", "GOLD 200", 3, 0, RECIPE_NO_ASPECT, 0},
-    {"ultramax-400-premier-v1", "ULTRAMAX 400", 3, 0, RECIPE_NO_ASPECT, 0},
-    {"c200-crystal-v1", "FUJI C200", 3, 0, RECIPE_NO_ASPECT, 0},
+    {"ultramax-400-ultra-v1", "ULTRAMAX 400", 3, 0, RECIPE_NO_ASPECT, 0},
+    {"c200-premier-v1", "FUJI C200", 3, 0, RECIPE_NO_ASPECT, 0},
     {"xtra-400-crystal-v1", "SUPERIA 400", 3, 0, RECIPE_NO_ASPECT, 0},
     {"pro-400h-crystal-v1", "PRO 400H", 3, 0, RECIPE_NO_ASPECT, 0},
 };

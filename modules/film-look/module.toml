@@ -7,8 +7,21 @@ version = 1
 # The default place in ADJ and in MENU: Film Look, Framing, Guides, Date, Grain.
 order = 10
 uses = ["CORE.TONE"]
+# The effects are made for color sensors: GR IV Monochrome does not load
+# Film Look.
+color_only = true
+# Tile 0 is the module tile, for Off at the root. A row of an effect shows
+# the icon of the effect.
+tiles = ["tiles/0-module.png"]
 
 [page]
 setting = "CORE.TONE"
 # The GRKit section of MENU turns each effect on or off for ADJ.
 options = true
+
+[[indicators]]
+id = "film_look"
+placement = "native_slot"
+slot = "image_control"
+enabled = { setting = "CORE.TONE", not_equals = 0 }
+icon = { setting = "CORE.TONE" }

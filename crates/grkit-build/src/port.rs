@@ -198,6 +198,9 @@ pub fn addresses(target: &Target) -> Result<Vec<Address>> {
         ("english_slot".to_string(), target.english_slot),
         ("pixel_base_slot".to_string(), target.pixel_base_slot),
     ];
+    if let Some((record, _)) = target.model_record {
+        data.push(("model_record".to_string(), record));
+    }
     if let Some(native) = target.image_control {
         for (index, &table) in native.tables.iter().enumerate() {
             data.push((format!("image_control.tables[{index}]"), table));
@@ -294,6 +297,12 @@ fn planned(target: &Target, address: &Address) -> (u32, u32) {
 const WEAK: &str = "only windows of mostly addresses agree: a table that grew or moved \
     matches at another start";
 
+/// Why a port in a run of equal functions needs a check
+/// (`relocation::Planner::repeated`). GR IV 1.20 has one more parameter
+/// setter than 1.11, and the port gave the next setter for two rows.
+const REPEATED: &str = "the function occurs another number of times nearby: a function \
+    added to or removed from a run of equal functions moves the others";
+
 /// A source in a window of mostly address words. A table of pointers masks
 /// to equal words, so its window can match where the table grew or moved,
 /// and a literal in it can then hold another entry. The code windows of
@@ -361,6 +370,7 @@ pub fn port(base: &FirmwareImage, other: &[u8], radius: u32) -> Result<Port> {
     let addresses = addresses(target)?;
     let mut planner = Planner::with_radius(base, radius)?;
     let mut symbols = Vec::new();
+    let mut repeated = Vec::new();
     for address in &addresses {
         let (planned, offset) = planned(target, address);
         symbols.push(
@@ -368,6 +378,11 @@ pub fn port(base: &FirmwareImage, other: &[u8], radius: u32) -> Result<Port> {
                 .map(|symbol| (symbol, offset))
                 .map_err(|error| format!("no window in {}: {error}", target.firmware)),
         );
+        repeated.push(if address.kind == Kind::Target {
+            None
+        } else {
+            planner.repeated(planned)
+        });
     }
     let plan = planner.finish();
     let resolution = relocation::resolve(&plan, other, radius)?;
@@ -375,10 +390,25 @@ pub fn port(base: &FirmwareImage, other: &[u8], radius: u32) -> Result<Port> {
         let start = address.checked_sub(RTOS_BASE)? as usize;
         Some(hex::encode(other.get(start..start + size)?))
     };
+    let masked: Vec<u32> = other
+        .chunks_exact(4)
+        .map(|word| relocation::mask(u32::from_le_bytes(word.try_into().unwrap())))
+        .collect();
+    // How often `words` occur within twice the radius of `at` in `other`.
+    let occurrences = |at: u32, words: &[u32]| -> usize {
+        let index = (at.saturating_sub(RTOS_BASE) / 4) as usize;
+        let span = (2 * radius / 4) as usize;
+        let low = index.saturating_sub(span);
+        let high = (index + span).min(masked.len().saturating_sub(words.len()));
+        (low..=high)
+            .filter(|&at| masked[at..at + words.len()] == *words)
+            .count()
+    };
     let addresses = addresses
         .into_iter()
         .zip(symbols)
-        .map(|(address, symbol)| {
+        .zip(repeated)
+        .map(|((address, symbol), repeated)| {
             let resolved = symbol.and_then(|(symbol, offset)| {
                 resolution.symbols[symbol]
                     .clone()
@@ -387,6 +417,13 @@ pub fn port(base: &FirmwareImage, other: &[u8], radius: u32) -> Result<Port> {
             let review = match &resolved {
                 Ok((_, sources)) if sources.iter().all(|source| weak(&plan, source)) => {
                     Some(WEAK.to_string())
+                }
+                Ok((value, _))
+                    if repeated
+                        .as_ref()
+                        .is_some_and(|(words, count)| occurrences(*value, words) != *count) =>
+                {
+                    Some(REPEATED.to_string())
                 }
                 _ => None,
             };
@@ -425,9 +462,9 @@ pub fn port(base: &FirmwareImage, other: &[u8], radius: u32) -> Result<Port> {
 /// Whether the installer relocates the base target to the other build: each
 /// address has a port without a review, and the plan of the installer, within
 /// `relocation::RADIUS`, resolves each source of each address to that port,
-/// with room for the private tail. The plan of a build has more symbols, such
-/// as branch targets, so a test of the build on the other firmware must still
-/// confirm it.
+/// with an executable tail. The plan of a build has more symbols, such as
+/// branch targets, and its actual code span must fit. A test of that build on
+/// the other firmware must still confirm both.
 fn relocatable(base: &FirmwareImage, other: &[u8], addresses: &[Ported]) -> Result<bool> {
     if addresses
         .iter()
@@ -446,9 +483,8 @@ fn relocatable(base: &FirmwareImage, other: &[u8], addresses: &[Ported]) -> Resu
         }
     }
     let resolution = relocation::resolve(&planner.finish(), other, relocation::RADIUS)?;
-    let (tail, end) = target.layout.tail;
     Ok(resolution.complete
-        && relocation::DATA_START - resolution.layout.tail >= end - tail
+        && resolution.layout.tail < components::RTOS_EXECUTABLE_END
         && symbols
             .iter()
             .zip(addresses)
@@ -846,6 +882,18 @@ impl Port {
             .native_tone_page
             .map_or("None".to_string(), |page| format!("Some({page:#x})"));
         push(out, 4, &format!("native_tone_page: {page},"), "");
+        match base.model_record {
+            Some((_, sensor_color)) => {
+                let (value, note) = self.value(Kind::Target, "model_record")?;
+                push(
+                    out,
+                    4,
+                    &format!("model_record: Some(({value:#x}, {sensor_color:#x})),"),
+                    &note,
+                );
+            }
+            None => push(out, 4, "model_record: None,", ""),
+        }
         push(out, 4, "layout: &LAYOUT,", "");
         let image_control = match base.image_control {
             Some(_) => "image_control: Some(&IMAGE_CONTROL),",
@@ -916,7 +964,6 @@ impl Port {
             push(out, 0, "};", "");
         }
 
-        let (tail, end) = layout.tail;
         push(out, 0, "", "");
         push(out, 0, "pub const LAYOUT: Layout = Layout {", "");
         push(
@@ -925,16 +972,7 @@ impl Port {
             &format!("define: {:?},", layout.define),
             &base_note("the definition that selects the new header in runtime/firmware.h"),
         );
-        push(
-            out,
-            4,
-            &format!(
-                "tail: ({:#x}, {:#x}),",
-                self.layout.tail,
-                self.layout.tail + (end - tail)
-            ),
-            "",
-        );
+        push(out, 4, &format!("tail: {:#x},", self.layout.tail), "");
         for field in [
             "contexts: CONTEXTS,",
             "sites: SITES,",

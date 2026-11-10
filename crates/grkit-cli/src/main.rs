@@ -81,6 +81,12 @@ enum Command {
         #[command(subcommand)]
         command: EffectsCommand,
     },
+    /// Make the fast-boot firmware from an official firmware update file
+    /// (docs/fastboot.md).
+    Firmware {
+        #[command(subcommand)]
+        command: FirmwareCommand,
+    },
     /// Package verified local runtimes and effects.
     Package {
         /// The runtime build of each firmware build of the camera, in release
@@ -203,6 +209,20 @@ enum ModuleCommand {
 }
 
 #[derive(Subcommand)]
+enum FirmwareCommand {
+    /// Write the fast-boot update file of an official update file, such as
+    /// fwdc239b.bin of GR III 2.10, or of the official ZIP that holds it. The
+    /// command refuses any other file.
+    Patch {
+        #[arg(long)]
+        firmware: PathBuf,
+        /// A new file, with the name of the official file for the camera.
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum EffectsCommand {
     Build {
         #[arg(long)]
@@ -238,6 +258,15 @@ enum EffectsCommand {
         /// The HALD level, 2 to 16. Level L gives an L^3 x L^3 image of L^2 points per axis.
         #[arg(long, default_value_t = 12)]
         level: usize,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read Cinema (Yellow) and Cinema (Green) from your GR IV firmware into new effect
+    /// definitions at OUT/ID/effect.json. FIRMWARE is an official GR IV zip or its
+    /// fwdc248b.bin, version 1.11 or 1.20. GRKit ships none of this data.
+    Native {
+        #[arg(long)]
+        firmware: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
@@ -464,6 +493,29 @@ fn run(command: Command) -> Result<Value> {
             Ok(json!({"output": out, "target": target.name, "effects": definitions.len()}))
         }
         Command::Effects {
+            command: EffectsCommand::Native { firmware, out },
+        } => {
+            let bytes = storage::read_bounded(&firmware, grkit_core::gr4_looks::MAX_FILE_SIZE)?;
+            let image = grkit_core::gr4_looks::Image::read(&bytes)?;
+            let definitions = image.definitions()?;
+            let ids: Vec<String> = definitions
+                .iter()
+                .map(|d| d["effect_id"].as_str().unwrap_or_default().to_owned())
+                .collect();
+            for id in &ids {
+                storage::validate_output(&out.join(id))?;
+            }
+            for (id, definition) in ids.iter().zip(&definitions) {
+                effects::compile_definition(definition)?;
+                let text = serde_json::to_string_pretty(definition)? + "\n";
+                storage::write_directory(
+                    &out.join(id),
+                    &Files::from([("effect.json".to_owned(), text.into_bytes())]),
+                )?;
+            }
+            Ok(json!({"output": out, "version": image.source.version, "effects": ids}))
+        }
+        Command::Effects {
             command:
                 EffectsCommand::Import {
                     lut,
@@ -630,6 +682,18 @@ fn run(command: Command) -> Result<Value> {
             let bytes = packaging::assemble_dump(grkit_build::dump::files(&tools)?)?;
             storage::write_new(&out, &bytes)?;
             Ok(json!({"path": out, "sha256": packaging::sha256(&bytes)}))
+        }
+        Command::Firmware {
+            command: FirmwareCommand::Patch { firmware, out },
+        } => {
+            let official = storage::read_bounded(&firmware, 64 * 1024 * 1024)?;
+            let patched = grkit_firmware::patch(&official)?;
+            storage::write_new(&out, &patched.bytes)?;
+            Ok(json!({
+                "path": out, "release": patched.release.name(),
+                "update_file": patched.release.update.name, "size": patched.bytes.len(),
+                "sha256": patched.release.result.sha256,
+            }))
         }
         Command::Site { build, out } => {
             let (target, files) = storage::export_runtime(&build, &out)?;

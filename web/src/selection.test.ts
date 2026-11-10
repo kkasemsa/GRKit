@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_EFFECTS } from './catalog';
-import { loadSelection, resolveSelection, saveSelection, selectImport } from './selection';
+import { importFit, loadSelection, resolveSelection, saveSelection, selectImport } from './selection';
 
 const ids = (count: number) => Array.from({ length: count }, (_, index) => `effect-${index}`);
 
@@ -71,18 +71,42 @@ describe('loadSelection and saveSelection', () => {
 
 describe('selectImport', () => {
   it('checks a close fit when the package has room', () => {
-    const result = selectImport(new Set(ids(18)), 'lut', 'B');
+    const result = selectImport(new Set(ids(18)), ['lut'], 'B');
     expect(result.selection.has('lut')).toBe(true);
     expect(result.full).toBe(false);
   });
 
   it('leaves a close fit out when the package is full', () => {
     const checked = new Set(ids(MAX_EFFECTS));
-    expect(selectImport(checked, 'lut', 'A')).toEqual({ selection: checked, full: true });
+    expect(selectImport(checked, ['lut'], 'A')).toEqual({ selection: checked, full: true });
   });
 
   it('leaves a loose fit for the user to check', () => {
     const checked = new Set(ids(2));
-    expect(selectImport(checked, 'lut', 'C')).toEqual({ selection: checked, full: false });
+    expect(selectImport(checked, ['lut'], 'C')).toEqual({ selection: checked, full: false });
+  });
+
+  it('checks native looks up to the package limit', () => {
+    const checked = new Set(ids(MAX_EFFECTS - 1));
+    const result = selectImport(checked, ['yellow', 'green'], 'exact');
+    expect(result.selection.has('yellow')).toBe(true);
+    expect(result.selection.has('green')).toBe(false);
+    expect(result.full).toBe(true);
+  });
+
+  it('keeps the selection of a replaced import that is checked', () => {
+    const checked = new Set([...ids(MAX_EFFECTS - 1), 'yellow']);
+    expect(selectImport(checked, ['yellow'], 'exact')).toEqual({ selection: checked, full: false });
+  });
+});
+
+describe('importFit', () => {
+  it('checks a restored effect as a native look, since it is the effect of the earlier package', () => {
+    const data = { blob: new Uint8Array(), table: new Uint8Array() };
+    expect(importFit({ ...data, kind: 'restored', source: 'GRKit.zip' })).toBe('exact');
+    expect(importFit({ ...data, kind: 'native', version: '1.20', source: 'gr4.zip' })).toBe('exact');
+    expect(
+      importFit({ ...data, kind: 'lut', grade: 'C', input: 'standard', warnings: [], source: 'a.cube' }),
+    ).toBe('C');
   });
 });

@@ -9,10 +9,11 @@
    INSTALL gives up its instance in the controller factory, so the next MENU
    builds its tabs again.
 
-   The rows: a row for each listed module (runtime/manage.h), which opens
-   its Enable row, its Options row, and the settings of its module page; ADJ
-   Order, which orders the module pages in ADJ; then About GRKit, which
-   shows the GRKit version and the project address.
+   The rows: the GRKit switch, which turns each module off and on at once
+   (runtime/manage.h); a row for each listed module, which opens its Enable
+   row, its Options row, and the settings of its module page; ADJ Order,
+   which orders the module pages in ADJ; then About GRKit, which shows the
+   GRKit version and the project address.
 
    A row targets MENU_ROW_TARGET + its slot, which no controller has: the
    controller change becomes a change to the borrowed settings submenu with
@@ -26,6 +27,7 @@
 #define MENU_ROW_GRKIT 1U
 #define MENU_ROW_LISTED 2U
 #define MENU_ROW_ADJ 3U
+#define MENU_ROW_SWITCH 4U
 /* The model snapshot that a cancel of the parameter page restores, as
    open_parameters takes it from ADJ. FW_ADJ_SNAPSHOT reads only the movie
    flag of its controller: GR III the byte ADJ_MOVIE_FIELD, GR IV a global
@@ -70,16 +72,20 @@ static u32 menu_rows_add(volatile u32 *h,u32 copy,u32 *rows,u32 slots,u32 kind,u
     return slots+1;
 }
 /* The GRKit rows fit the Customize tab of each build: its stock rows
-   (MENU_TAB_STOCK_ROWS of the build header), then a row for each listed
-   module, ADJ Order, and About GRKit. */
-_Static_assert(MENU_ROWS_SLOTS==MANAGE_MODULES+2U,"A row slot for each GRKit row");
+   (MENU_TAB_STOCK_ROWS of the build header), then the GRKit switch, a row
+   for each listed module, ADJ Order, and About GRKit. */
+_Static_assert(MENU_ROWS_SLOTS==MANAGE_MODULES+3U,"A row slot for each GRKit row");
 _Static_assert(MENU_TAB_STOCK_ROWS+MENU_ROWS_SLOTS<=MENU_TAB_MAX_ROWS,"The Customize tab holds each GRKit row");
 static void menu_rows_install(volatile u32 *h) {
     volatile u32 *state=services_word(h,SERVICES_MENU);
     u32 copy=(u32)services_word(h,SERVICES_MENU+MENU_ROWS_TAB), stock, rows, sections, slots=0, i, top;
-    u32 listed=manage_count(h), adj=listed>0;
+    u32 listed=0, adj, on=manage_switch_shown(h), n;
     if(state[MENU_ROWS_DONE/4]) return;
+    /* A color-only module on a monochrome camera gets no row. */
+    for(i=0;i<manage_count(h);++i) listed+=manage_status(h,i)!=MANAGE_COLOR_ONLY;
     state[MENU_ROWS_DONE/4]=1;
+    manage_adj_refresh(h);
+    adj=manage_adj_count(h)>0;
     stock=WORD(FW_MENU_TABS+4*MENU_TAB_GRKIT,0);
     if(!stock) return;
     for(i=0;i<MENU_TAB_SIZE/4;++i) WORD(copy,4*i)=WORD(stock,4*i);
@@ -95,13 +101,18 @@ static void menu_rows_install(volatile u32 *h) {
     }
     descriptor(services_word(h,SERVICES_MENU+MENU_ROWS_TITLE_AT),grkit_title);
     /* A build with more stock rows than its header gives, such as a build
-       that INSTALL relocates, keeps ADJ Order and About GRKit: the last
-       modules of the default order get no row. */
-    if(rows+listed+adj+1U>MENU_TAB_MAX_ROWS)
-        listed=MENU_TAB_MAX_ROWS>rows+adj+1U ? MENU_TAB_MAX_ROWS-rows-adj-1U : 0;
+       that INSTALL relocates, keeps the switch, ADJ Order, and About GRKit:
+       the last modules of the default order get no row. */
+    if(rows+on+listed+adj+1U>MENU_TAB_MAX_ROWS)
+        listed=MENU_TAB_MAX_ROWS>rows+on+adj+1U ? MENU_TAB_MAX_ROWS-rows-on-adj-1U : 0;
+    if(on) slots=menu_rows_add(h,copy,&rows,slots,MENU_ROW_SWITCH,0);
     /* The modules in their default order, which the ADJ Order row changes
        only in ADJ. */
-    for(i=0;i<listed;++i) slots=menu_rows_add(h,copy,&rows,slots,MENU_ROW_LISTED,i);
+    for(i=0,n=0;i<manage_count(h) && n<listed;++i) {
+        if(manage_status(h,i)==MANAGE_COLOR_ONLY) continue;
+        slots=menu_rows_add(h,copy,&rows,slots,MENU_ROW_LISTED,i);
+        ++n;
+    }
     if(adj) slots=menu_rows_add(h,copy,&rows,slots,MENU_ROW_ADJ,0);
     slots=menu_rows_add(h,copy,&rows,slots,MENU_ROW_GRKIT,0);
     state[MENU_ROWS_COUNT/4]=slots;
@@ -116,6 +127,24 @@ static u32 menu_rows_controller(volatile u32 *h,u32 id) {
     u32 slot=id-MENU_ROW_TARGET, kind, module;
     if(!h[GRKIT_HOST_SERVICES/4]) return id;
     menu_rows_install(h);
+    /* Parent and child share one native submenu. MENU can therefore return
+       to that same controller. Check the incoming target before translating
+       a child link; a value page returning to the submenu is not a Back. */
+    u32 self_back=id==SETTINGS_SUBMENU && services_word(h,SERVICES_MENU+MENU_ROWS_CURRENT)[0]==SETTINGS_SUBMENU;
+    if((id==menu_return(h) || self_back) && (h[GRKIT_HOST_SETTINGS/4]&SETTINGS_PARENT)) {
+        settings_start(h,LISTED_PAGE);
+        return SETTINGS_SUBMENU;
+    }
+    if(self_back && (h[GRKIT_HOST_SETTINGS/4]&0xffffU)==LISTED_PAGE+1 &&
+       listed_slot(h)<module_pages(h) && menu_page(h,listed_slot(h))==&group_module) return menu_return(h);
+    if(id>=MENU_GROUP_TARGET && id<MENU_GROUP_TARGET+SETTING_ROWS && settings_page(h)==listed_settings) {
+        u32 child=listed_child(h,id-MENU_GROUP_TARGET);
+        if(child<module_pages(h)) {
+            settings_start(h,child);
+            h[GRKIT_HOST_SETTINGS/4]|=SETTINGS_PARENT;
+            return SETTINGS_SUBMENU;
+        }
+    }
     /* The Fn adjustments row of the page of Image Control. Without a
        committed effect, it opens nothing. */
     if(id==MENU_FN_TARGET) {
@@ -131,6 +160,11 @@ static u32 menu_rows_controller(volatile u32 *h,u32 id) {
     if(kind==MENU_ROW_ADJ) {
         settings_start(h,MANAGE_MODULE);
         return SETTINGS_SUBMENU;
+    }
+    /* Enable GRKit opens its value page at once: On or Off. */
+    if(kind==MENU_ROW_SWITCH) {
+        settings_start(h,SWITCH_MODULE);
+        return settings_pages[0];
     }
     if(kind==MENU_ROW_LISTED) {
         services_word(h,SERVICES_MENU+MENU_ROWS_LISTED)[0]=module;
@@ -173,15 +207,17 @@ static void menu_row_fill(u32 slot,u32 row) {
     kind=at[MENU_ROW_KIND/4];
     module=at[MENU_ROW_MODULE/4];
     if(kind==MENU_ROW_ADJ) { label=text(h,TEXT_ADJ); value=no_text; }
+    else if(kind==MENU_ROW_SWITCH) { label=switch_menu_label(h); value=on_off_text(h,manage_all_off(h)); }
     else if(kind==MENU_ROW_LISTED) {
-        /* A loaded module shows the value of its page, as a native row shows
-           its value, or Off while it is Off; another module its Enable
-           value. */
+        /* A loaded choice page shows its value, and a group the children
+           that are on; a settings-only page has no summary value. Each
+           shows Off while the module or switch is Off. Another module
+           shows its Enable value. */
         page=listed_page(h,module);
         if(page<module_pages(h)) {
             const MenuPage *m=menu_page(h,page);
             label=m->title(h);
-            value=manage_off(h,module) ? on_off_text(h,1) : m->label(h,m->committed(h));
+            value=manage_halted(h,module) ? on_off_text(h,1) : choice_group(h) ? group_value_text(h) : choice_direct(h) ? no_text : m->label(h,m->committed(h));
         }
         else { label=manage_name(h,module); value=on_off_text(h,manage_off(h,module)); }
     }
@@ -199,11 +235,13 @@ static void menu_row_fill(u32 slot,u32 row) {
 MENU_ROW_FILLER(0) MENU_ROW_FILLER(1) MENU_ROW_FILLER(2) MENU_ROW_FILLER(3)
 MENU_ROW_FILLER(4) MENU_ROW_FILLER(5) MENU_ROW_FILLER(6) MENU_ROW_FILLER(7)
 MENU_ROW_FILLER(8) MENU_ROW_FILLER(9) MENU_ROW_FILLER(10) MENU_ROW_FILLER(11)
-_Static_assert(MENU_ROWS_SLOTS==12,"A filler for each row");
+MENU_ROW_FILLER(12)
+_Static_assert(MENU_ROWS_SLOTS==13,"A filler for each row");
 static void (*const fillers[MENU_ROWS_SLOTS])(u32,u32)={
     menu_row_fill_0,menu_row_fill_1,menu_row_fill_2,menu_row_fill_3,
     menu_row_fill_4,menu_row_fill_5,menu_row_fill_6,menu_row_fill_7,
-    menu_row_fill_8,menu_row_fill_9,menu_row_fill_10,menu_row_fill_11};
+    menu_row_fill_8,menu_row_fill_9,menu_row_fill_10,menu_row_fill_11,
+    menu_row_fill_12};
 /* The text of a view of a MENU row or of the section title, or 0. */
 static u32 menu_rows_text(volatile u32 *h,u32 view,u32 id) {
     u32 slot, n;

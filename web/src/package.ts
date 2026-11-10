@@ -1,66 +1,28 @@
 import type { CardFile } from './card';
 import { effectUrl, siteUrl, type Effect, type PackageEffect } from './catalog';
 import { effectFilename } from './import/names';
+import { fetchFile, type Progress } from './transfer';
 import wasmUrl from './wasm/grkit_wasm_bg.wasm?url';
 
-/** A request fails when no data arrives for this long, so a stalled connection ends in an error. */
-const STALL_MS = 20_000;
-
 /** One file that the package needs. A download keeps its bytes for later packages. */
-interface Transfer {
+interface Transfer extends Progress {
   bytes: Promise<Uint8Array>;
-  received: number;
 }
 
 const transfers = new Map<string, Transfer>();
-/** Called on each received chunk, so a running build can report its progress. */
+/** Called on each received chunk and each retry, so a running build can report its progress. */
 const watchers = new Set<() => void>();
 
 function notify() {
   for (const watcher of watchers) watcher();
 }
 
-async function download(url: string, transfer: Transfer): Promise<Uint8Array> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const arm = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => controller.abort(new Error(`No data for ${STALL_MS} ms: ${url}`)), STALL_MS);
-  };
-  arm();
-  try {
-    const response = await fetch(url, { cache: 'no-cache', signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status} ${url}`);
-    }
-    const chunks: Uint8Array[] = [];
-    const reader = response.body!.getReader();
-    for (;;) {
-      arm();
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      transfer.received += value.length;
-      notify();
-    }
-    const bytes = new Uint8Array(transfer.received);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return bytes;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** The download of `url`: a new one, or the one in progress or done. A failed one starts again. */
 function transfer(url: string): Transfer {
   let item = transfers.get(url);
   if (!item) {
-    const created: Transfer = { bytes: Promise.resolve(new Uint8Array()), received: 0 };
-    created.bytes = download(url, created).catch((error: unknown) => {
+    const created: Transfer = { bytes: Promise.resolve(new Uint8Array()), received: 0, retrying: false };
+    created.bytes = fetchFile(url, created, notify).catch((error: unknown) => {
       if (transfers.get(url) === created) transfers.delete(url);
       throw error;
     });
@@ -146,8 +108,10 @@ type Packager = InstanceType<Wasm['Package']>;
  * camera have the same effects, so the effects come from the first build.
  * `camera` selects the ModeSet file. `modules` names the module files that the package holds.
  * `language` selects the installation guide, which the site publishes as `guides/<camera>/<language>.pdf`.
+ * `imports` is the import library of the browser (`import/library.ts`), or null without imports.
  * grkit-wasm checks each runtime file against `build.json` and each effect's format.
- * `onProgress` receives the number of bytes of the files of this package that have arrived.
+ * `onProgress` receives the number of bytes of the files of this package that have arrived, and
+ * whether a file of it waits for a new attempt.
  */
 async function assemble<T>(
   targets: readonly string[],
@@ -155,7 +119,8 @@ async function assemble<T>(
   effects: readonly PackageEffect[],
   modules: readonly string[],
   language: string,
-  onProgress: (received: number) => void,
+  imports: Uint8Array | null,
+  onProgress: (received: number, retrying: boolean) => void,
   finish: (builder: Packager) => T,
 ): Promise<T> {
   const used = new Set<string>([wasmUrl]);
@@ -165,8 +130,13 @@ async function assemble<T>(
   };
   const report = () => {
     let received = 0;
-    for (const url of used) received += transfers.get(url)?.received ?? 0;
-    onProgress(received);
+    let retrying = false;
+    for (const url of used) {
+      const item = transfers.get(url);
+      received += item?.received ?? 0;
+      retrying ||= item?.retrying ?? false;
+    }
+    onProgress(received, retrying);
   };
   watchers.add(report);
   try {
@@ -203,6 +173,7 @@ async function assemble<T>(
       builder.setCamera(camera);
       builder.setLanguage(language);
       builder.setGuide(guide);
+      if (imports) builder.setImports(imports);
       for (const build of builds.slice(1)) builder.addBuild(build);
       for (const [number, target] of targets.entries()) {
         const paths = builder.runtimePaths(number);
@@ -244,9 +215,10 @@ export function buildPackage(
   effects: readonly PackageEffect[],
   modules: readonly string[],
   language: string,
-  onProgress: (received: number) => void,
+  imports: Uint8Array | null,
+  onProgress: (received: number, retrying: boolean) => void,
 ): Promise<Blob> {
-  return assemble(targets, camera, effects, modules, language, onProgress, (builder) => {
+  return assemble(targets, camera, effects, modules, language, imports, onProgress, (builder) => {
     const zip = builder.build();
     return new Blob([zip as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
   });
@@ -262,9 +234,10 @@ export function buildCardFiles(
   effects: readonly PackageEffect[],
   modules: readonly string[],
   language: string,
+  imports: Uint8Array | null,
   onProgress: (received: number) => void,
 ): Promise<CardFile[]> {
-  return assemble(targets, camera, effects, modules, language, onProgress, (builder) =>
+  return assemble(targets, camera, effects, modules, language, imports, onProgress, (builder) =>
     builder.cardFiles().map((file) => {
       const item = { path: file.path, bytes: file.bytes };
       file.free();
@@ -312,6 +285,19 @@ export async function buildScriptsOff(camera: string): Promise<Blob> {
   return new Blob([module.scriptsOffPackage(camera) as Uint8Array<ArrayBuffer>], {
     type: 'application/zip',
   });
+}
+
+/**
+ * The file name of a downloaded package: the GRKit version, the camera, and the local time of the
+ * download, such as `GRKit-1.4.2-GR-III-20261105-1830.zip`, so the user can tell downloads apart.
+ * `camera` is the name of a camera entry: its first model, such as `GR III` of
+ * `GR III / GR III HDF`, names the file.
+ */
+export function packageFilename(version: string, camera: string, time: Date): string {
+  const two = (value: number) => String(value).padStart(2, '0');
+  const date = `${time.getFullYear()}${two(time.getMonth() + 1)}${two(time.getDate())}`;
+  const model = (camera.split(' / ')[0] ?? camera).trim().replace(/\s+/g, '-');
+  return `GRKit-${version}-${model}-${date}-${two(time.getHours())}${two(time.getMinutes())}.zip`;
 }
 
 /** Starts the download of a blob as a file. */

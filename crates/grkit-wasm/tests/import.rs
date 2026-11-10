@@ -1,5 +1,7 @@
 use grkit_core::{cube, effects, fit, site};
-use grkit_wasm::{guess_input, import_lut, ImportRequest, MAX_LUT_SIZE};
+use grkit_wasm::{
+    effect_preview, guess_input, import_lut, relabel_effect, ImportRequest, MAX_LUT_SIZE,
+};
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 
@@ -127,4 +129,59 @@ fn guesses_the_input_from_the_lut_data() {
     }
     assert_eq!(guess_input(text.as_bytes(), &base).unwrap(), "vlog");
     assert!(guess_input(b"not a LUT", &base).is_err());
+}
+
+#[test]
+fn the_preview_of_an_effect_file_is_the_preview_of_its_import() {
+    let base = synthetic_base();
+    let imported = import_lut(&warm_cube(), &base, &request("lut-warm", "Warm")).unwrap();
+    assert_eq!(
+        effect_preview(&imported.blob, &base, &[]).unwrap(),
+        imported.preview
+    );
+    assert!(effect_preview(b"GRFX0001 not an effect", &base, &[]).is_err());
+    assert!(effect_preview(&imported.blob, &base[..255], &[]).is_err());
+    // Tone curves are 512 values: the neutral curve, then the look curve.
+    assert!(effect_preview(&imported.blob, &base, &[0; 511]).is_err());
+}
+
+#[test]
+fn a_relabeled_effect_keeps_its_id_and_its_look() {
+    let imported =
+        import_lut(&warm_cube(), &synthetic_base(), &request("warm-v1", "Warm")).unwrap();
+    let (before, icon) = effects::decode(&imported.blob).unwrap();
+    // A new name keeps the ID, the icon, and every value of the look.
+    let renamed = relabel_effect(&imported.blob, "Warm Day", None).unwrap();
+    let (after, same_icon) = effects::decode(&renamed).unwrap();
+    assert_eq!(
+        (after.id.as_str(), after.name.as_str()),
+        ("warm-v1", "Warm Day")
+    );
+    assert_eq!(same_icon, icon);
+    assert_eq!(after.to_json()["name"], "Warm Day");
+    let mut look = before.to_json();
+    look["name"] = json!("Warm Day");
+    assert_eq!(after.to_json(), look);
+    // Back to the old name, the file is the same again.
+    assert_eq!(
+        relabel_effect(&renamed, "Warm", None).unwrap(),
+        imported.blob
+    );
+    // A new icon replaces the old one.
+    let cover = json!({"template": "box", "brand": "Kodak", "name": "DAY", "band": false});
+    let pixels = effects::icon_pixels(&cover).unwrap();
+    let (_, new_icon) =
+        effects::decode(&relabel_effect(&imported.blob, "Warm", Some(&pixels)).unwrap()).unwrap();
+    assert_eq!(new_icon, pixels);
+    assert_ne!(new_icon, icon);
+    // A name that the camera cannot show, an icon of another size, and a file that is not an
+    // effect fail.
+    for name in ["", " Warm", "Warm 1234567890123", "Wärm"] {
+        assert!(
+            relabel_effect(&imported.blob, name, None).is_err(),
+            "{name:?}"
+        );
+    }
+    assert!(relabel_effect(&imported.blob, "Warm", Some(&[0; 16])).is_err());
+    assert!(relabel_effect(b"GRFX0001", "Warm", None).is_err());
 }

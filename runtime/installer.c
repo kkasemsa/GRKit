@@ -17,6 +17,18 @@ struct patch { u32 address, size, kind; const u8 *before; u8 *after; };
 #include "services.h"
 #include "install_status.h"
 
+/* RTOS_NATIVE builds the installer into the RTOS-side loader of
+   runtime/fastboot/, whose backend.c serves the same calls without Linux. */
+#ifdef RTOS_NATIVE
+/* The loader runs from FAST_BASE up to RTOS_EXECUTABLE_END (fast.ld), so the
+   code of GRKit ends before it. */
+#define CODE_END FAST_BASE
+#else
+#define CODE_END RTOS_EXECUTABLE_END
+#endif
+#ifdef RTOS_NATIVE
+extern long syscall6(u32 number, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f);
+#else
 static long syscall6(u32 number, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f)
 {
     register u32 r0 __asm__("r0") = a;
@@ -30,6 +42,11 @@ static long syscall6(u32 number, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f)
                      "r"(r4), "r"(r5), "r"(r7) : "memory", "cc");
     return (long)r0;
 }
+#endif
+/* The loader script allocates one array before the planned ones: the array
+   of the firmware probe and the fast-boot head (runtime::fast). */
+#define ARRAY_LEAD 1U
+#define ARRAYS (ARRAY_TABLE + ARRAY_LEAD * 8U)
 static volatile u8 *mapping;
 /* One profile more than MAX_COUNT shows that the effects do not all fit. */
 static u8 profiles[MAX_COUNT + 1][GRKIT_GRF_MAX_SIZE];
@@ -49,12 +66,16 @@ static const char inbox_path[] = INBOX_PATH;
 static const char package_path[] = PACKAGE_PATH;
 static const char imported_path[] = IMPORTED_PATH;
 static const char data_path[] = DATA_PATH;
+static const char ram_plan_path[] = RAM_PLAN_PATH;
+/* The result files of the Linux steps. On the RTOS side, the loader reads
+   the plan header and the status from the script array. */
+#ifndef RTOS_NATIVE
 static const char plan_path[] = PLAN_PATH;
 static const char plan_tmp[] = PLAN_TMP_PATH;
-static const char ram_plan_path[] = RAM_PLAN_PATH;
 static const char lock_path[] = LOCK_PATH;
 static const char done_path[] = DONE_PATH;
 static const char failed_path[] = FAILED_PATH;
+#endif
 /* A marker file of the safe mode or of the profile is NAME or NAME.TXT, as
    a text editor adds the extension. */
 static const char safe_path[] = SAFE_PATH, safe_text_path[] = SAFE_TEXT_PATH;
@@ -80,6 +101,8 @@ _Static_assert(DIRECTORY_UNREADABLE == STATUS_LIBRARY_UNREADABLE && DIRECTORY_BA
                "A failed listing reports its status");
 _Static_assert(GRM_BAD_FILE > STATUS_OTHER_BUILD, "The module statuses follow the install statuses");
 #include "state.h"
+#define TONING_HALF(address) (*(volatile u16 *)at(address))
+#include "toning.h"
 #include "manage.h"
 /* The effect files that GRKit lists (runtime/effects.h): the head of each
    profile, which holds its ID and name, its file name, its status at this
@@ -97,6 +120,10 @@ static u32 listed_record[EFFECTS_LISTED];
 /* A path in the library: the folder, '/', an 8.3 name, and NUL. */
 #define PATH_MAX_OF(a, b) (sizeof(a) > sizeof(b) ? sizeof(a) : sizeof(b))
 #define EFFECT_PATH_SIZE (PATH_MAX_OF(legacy_effects_path, PATH_MAX_OF(library_path, inbox_path)) + CATALOG_NAME_SIZE)
+#ifdef RTOS_NATIVE
+/* The calls of the RTOS backend, such as FAST_FILE_STAMP. */
+#include "fastboot/calls.h"
+#endif
 #include "install_library.h"
 #include "install_effects.h"
 /* The artwork tiles of the usable modules (plan_modules). Their icon slots
@@ -113,8 +140,21 @@ static u32 chunk_count(u32 chunk)
     return left < ICONS_PER_CHUNK ? left : ICONS_PER_CHUNK;
 }
 #include "install_plan.h"
+/* The plan header goes to the card on Linux, where the loader reads it. On
+   the RTOS side, the loader calls SCAN once and reads the header from the
+   script array (runtime/fastboot/backend.c), so SCAN writes no plan file. */
+static void plan_files_close(long fd)
+{
+#ifndef RTOS_NATIVE
+    syscall6(6, fd, 0, 0, 0, 0, 0);
+    syscall6(10, (u32)plan_tmp, 0, 0, 0, 0, 0);
+#else
+    (void)fd;
+#endif
+}
 static int scan(void)
 {
+#ifndef RTOS_NATIVE
     /* An earlier attempt of this power-on wrote the plan: the loader deletes
        it at power-on. A second plan would replace it in a rename, which the
        camera's Linux does not do. */
@@ -126,6 +166,9 @@ static int scan(void)
     fd = syscall6(5, (u32)plan_tmp, 0xc1, 0600, 0, 0, 0);
     if (fd == -17) return STATUS_BUSY;
     if (fd < 0) return STATUS_PLAN_WRITE;
+#else
+    long fd = -1;
+#endif
     /* The marker files of the safe mode and of the profile. */
     safe_mode = present(safe_path) || present(safe_text_path);
     profile_mode = present(profile_path) || present(profile_text_path);
@@ -135,8 +178,7 @@ static int scan(void)
     collect();
     int status = discover();
     if (status) {
-        syscall6(6, fd, 0, 0, 0, 0, 0);
-        syscall6(10, (u32)plan_tmp, 0, 0, 0, 0, 0);
+        plan_files_close(fd);
         return status;
     }
     plan_array();
@@ -163,14 +205,17 @@ static int scan(void)
     }
     /* The whole plan goes to RAM, then only its header to the card. The
        loader starts INSTALL when the header appears on the card, so INSTALL
-       always finds the whole plan. A card write of the plan takes about
-       0.35 s on a camera. */
+       always finds the whole plan. A card write of the whole plan takes about
+       0.35 s on a camera. On the RTOS side, the RAM is that of the fast-boot
+       file (runtime/fastboot/backend.c). */
     u32 done = 0, total = effects_at + listed_count * GRKIT_PLANNED_EFFECT_SIZE;
     if (!write_file(ram_plan_path, plan, total)) {
-        syscall6(6, fd, 0, 0, 0, 0, 0);
-        syscall6(10, (u32)plan_tmp, 0, 0, 0, 0, 0);
+        plan_files_close(fd);
         return STATUS_PLAN_WRITE;
     }
+#ifdef RTOS_NATIVE
+    (void)done;
+#else
     while (done < GRKIT_PLAN_HEADER_SIZE) {
         long n = syscall6(4, fd, (u32)(plan + done), GRKIT_PLAN_HEADER_SIZE - done, 0, 0, 0);
         if (n <= 0) break;
@@ -181,6 +226,7 @@ static int scan(void)
         syscall6(10, (u32)plan_tmp, 0, 0, 0, 0, 0);
         return STATUS_PLAN_WRITE;
     }
+#endif
     print("GR_MODULE_SCANNED "); number(count); print("\n");
     return 0;
 }
@@ -316,8 +362,14 @@ static int read_plan(void)
     syscall6(6, fd, 0, 0, 0, 0, 0);
     if (got < 0 || (have == sizeof(plan) && got) || have < GRKIT_PLAN_HEADER_SIZE ||
         get32(plan + GRKIT_PLAN_MAGIC) != GRKIT_PLAN_MAGIC_VALUE) return STATUS_PLAN;
+#ifdef RTOS_NATIVE
+    /* The loader allocated the arrays from the header of this plan in its
+       script array, so no card header exists. */
+    (void)header;
+#else
     if (read_text(plan_path, header, sizeof(header)) != (long)sizeof(header) || !equal(header, plan, sizeof(header)))
         return STATUS_PLAN;
+#endif
     count = get32(plan + GRKIT_PLAN_COUNT);
     safe_mode = get32(plan + GRKIT_PLAN_MODES) & GRKIT_PLAN_SAFE;
     profile_mode = (get32(plan + GRKIT_PLAN_MODES) & GRKIT_PLAN_PROFILE) != 0;
@@ -345,6 +397,18 @@ static int read_plan(void)
         if ((bytes != GRKIT_GRF_SIZE && bytes != GRKIT_GRF_MAX_SIZE) || !valid_profile(profiles[i], bytes)) return STATUS_PLAN;
     }
     return 0;
+}
+/* Whether the camera has a monochrome sensor, as GR IV Monochrome: the sensor
+   color byte of the current model record is 1. A build without the model
+   record (MODEL_RECORD), or a record that is not set, counts as color. */
+static int monochrome_camera(void)
+{
+#ifdef MODEL_RECORD
+    u32 record = word(MODEL_RECORD);
+    return record >= RELOCATION_RTOS_BASE && record < relocation.image_end && at(record + MODEL_SENSOR_COLOR)[0] == 1;
+#else
+    return 0;
+#endif
 }
 #include "install_modules.h"
 /* ---- State (runtime/state.h) ----------------------------------------------
@@ -376,7 +440,11 @@ static void apply_state(u32 base, u32 table)
     static const u16 words[] = {GRKIT_CORE_SETTING_WORDS}, values[] = {GRKIT_CORE_SETTING_VALUES};
     u32 value;
     for (u32 k = 0; k < GRKIT_CORE_SETTING_COUNT; ++k) {
-        if (!(capabilities_used >> k & 1) || !state_value(&saved_state, ids[k], &value)) continue;
+        /* UI-only keys (no firmware points) always restore: ADJ open preference
+           and the last GRKit root module. Module capabilities still need a
+           loaded module that uses them. */
+        if ((core_setting_points[k] && !(capabilities_used >> k & 1)) ||
+            !state_value(&saved_state, ids[k], &value)) continue;
         if (k == GRKIT_CORE_TONE - GRKIT_CORE_SETTING_BASE) {
             /* The effect is its ImageTone code. */
             for (u32 i = 0; i < count; ++i) {
@@ -385,11 +453,15 @@ static void apply_state(u32 base, u32 table)
             }
         } else if (value < values[k]) store(base + words[k], value);
     }
+    /* ADJ exited from GRKit on the last power-on: the next ADJ that opens
+       opens GRKit (RETURN_POWERON in runtime/menu.c). An ADJ that is open
+       now stays as it is. */
+    if (word(base + GRKIT_HOST_ADJ_OPEN) == 1) store(base + GRKIT_HOST_RETURN, 5);
     if (table) {
         u32 n = word(table);
         for (u32 k = 0; k < n && k < GRKIT_MODULE_SETTINGS_MAX; ++k) {
             u32 entry = table + 4 * SETTINGS_ENTRY(k), id = word(entry);
-            if (id && state_value(&saved_state, id, &value) && value < word(entry + 8)) store(entry + 4, value);
+            store(entry + 4, state_setting_value(&saved_state, id, word(entry + 4), word(entry + 8)));
         }
         sync_alias(table, 4 * SETTINGS_WORDS(n));
     }
@@ -400,6 +472,16 @@ static void apply_state(u32 base, u32 table)
         if (!state_value(&saved_state, PARAMETER_KEY_BASE + code, &value) || value > PARAMETER_VALUE_MAX) continue;
         for (u32 d = 0; d < 9; ++d) { at(record + GRKIT_RECORD_PARAMETERS + d)[0] = (u8)(value % 9); value /= 9; }
     }
+    /* The Toning of each native look with its own curves in a slot. */
+    for (u32 i = 0; i < count; ++i) {
+        u32 record = base + GRKIT_HOST_HEADER_SIZE + i * GRKIT_RECORD_SIZE;
+        u32 slot = at(record + GRKIT_RECORD_TONE_SLOT)[0];
+        u32 code = *(volatile u16 *)at(record + GRKIT_RECORD_CODE) & 0x7fffU;
+        if (!slot || !state_value(&saved_state, TONING_KEY_BASE + code, &value) || value > 8) continue;
+        at(record + GRKIT_RECORD_TONING)[0] = (u8)value;
+        toning_curves(record + GRKIT_RECORD_CURVES,
+            word(base + GRKIT_HOST_TAIL) + GRKIT_TONE_CURVES + (slot - 1) * GRKIT_TONE_SLOT_SIZE, toning_value(value));
+    }
 }
 /* The script arrays that the loader allocated (grkit_core::runtime::loader):
    the registry, the icon chunks, the module array, then the tail. */
@@ -407,13 +489,13 @@ struct arrays { u32 base, tail, module_array, icon_bases[MAX_CHUNKS]; };
 /* Check that each array has its planned size and that no two overlap. */
 static int check_arrays(struct arrays *a)
 {
-    if (*(volatile u16 *)at(ARRAY_COUNT) != 2 + icon_chunks + (module_words != 0) || word(ARRAY_TABLE) != size / 4) return STATUS_ARRAYS;
-    u32 base = a->base = word(ARRAY_TABLE + 4), *icon_bases = a->icon_bases;
+    if (*(volatile u16 *)at(ARRAY_COUNT) != ARRAY_LEAD + 2 + icon_chunks + (module_words != 0) || word(ARRAYS) != size / 4) return STATUS_ARRAYS;
+    u32 base = a->base = word(ARRAYS + 4), *icon_bases = a->icon_bases;
     if (!heap(base, size)) return STATUS_ARRAY_MEMORY;
     for (u32 i = 0; i < icon_chunks; ++i) {
         u32 bytes = chunk_count(i) * ICON_STRIDE;
-        u32 ptr = word(ARRAY_TABLE + (i + 1) * 8 + 4);
-        if (word(ARRAY_TABLE + (i + 1) * 8) != bytes / 4 || !heap(ptr, bytes) ||
+        u32 ptr = word(ARRAYS + (i + 1) * 8 + 4);
+        if (word(ARRAYS + (i + 1) * 8) != bytes / 4 || !heap(ptr, bytes) ||
             (ptr < base + size && base < ptr + bytes)) return STATUS_ARRAY_MEMORY;
         for (u32 j = 0; j < i; ++j)
             if (ptr < icon_bases[j] + chunk_count(j) * ICON_STRIDE && icon_bases[j] < ptr + bytes) return STATUS_ARRAY_MEMORY;
@@ -422,7 +504,7 @@ static int check_arrays(struct arrays *a)
     /* The module array follows the icon chunks. */
     u32 module_array = a->module_array = 0;
     if (module_words) {
-        u32 entry = ARRAY_TABLE + (1 + icon_chunks) * 8, bytes = module_words * 4;
+        u32 entry = ARRAYS + (1 + icon_chunks) * 8, bytes = module_words * 4;
         module_array = a->module_array = word(entry + 4);
         if (word(entry) != module_words || !heap(module_array, bytes) ||
             (module_array < base + size && base < module_array + bytes)) return STATUS_ARRAY_MEMORY;
@@ -430,8 +512,8 @@ static int check_arrays(struct arrays *a)
             if (module_array < icon_bases[j] + chunk_count(j) * ICON_STRIDE && icon_bases[j] < module_array + bytes) return STATUS_ARRAY_MEMORY;
     }
     /* The tail follows the other arrays and overlaps none of them. */
-    u32 tail = a->tail = word(ARRAY_TABLE + (2 + icon_chunks + (module_words != 0) - 1) * 8 + 4);
-    if (word(ARRAY_TABLE + (2 + icon_chunks + (module_words != 0) - 1) * 8) != GRKIT_TAIL_SIZE / 4 ||
+    u32 tail = a->tail = word(ARRAYS + (2 + icon_chunks + (module_words != 0) - 1) * 8 + 4);
+    if (word(ARRAYS + (2 + icon_chunks + (module_words != 0) - 1) * 8) != GRKIT_TAIL_SIZE / 4 ||
         !heap(tail, GRKIT_TAIL_SIZE) || (tail < base + size && base < tail + GRKIT_TAIL_SIZE) ||
         (module_array && tail < module_array + module_words * 4 && module_array < tail + GRKIT_TAIL_SIZE)) return STATUS_ARRAY_MEMORY;
     for (u32 j = 0; j < icon_chunks; ++j)
@@ -516,6 +598,10 @@ static void write_header(const struct arrays *a)
     store(base + GRKIT_HOST_MAGIC, GRKIT_HOST_MAGIC_VALUE); store(base + GRKIT_HOST_VERSION, GRKIT_HOST_VERSION_VALUE);
     /* The next still live view shows that GRKit has loaded (runtime/framing.c). */
     store(base + GRKIT_HOST_LOAD_CUE, 1);
+    /* The shot ring of the picture hooks (runtime/picture.c) starts empty. The
+       tail holds noise after power-on, and after a soft reset the ring of the
+       last start, whose keys a new shot could match. */
+    zero(at(tail + GRKIT_SHOT_RING), GRKIT_SHOT_ENTRY + GRKIT_SHOT_ENTRIES * GRKIT_SHOT_STRIDE);
     for (u32 i = 0; i < icon_chunks; ++i) {
         zero(at(a->icon_bases[i]), chunk_count(i) * ICON_STRIDE);
         store(base + GRKIT_HOST_ICON_CHUNKS + i * 4, a->icon_bases[i]);
@@ -533,6 +619,7 @@ static void write_header(const struct arrays *a)
 /* Write the record, the menu summaries, and the icon of each effect. */
 static void write_records(const struct arrays *a, u32 pixels)
 {
+    u32 tone_slots = 0;
     u32 base = a->base, text = a->tail + GRKIT_PICTURE_SCRATCH;
     const u32 *icon_bases = a->icon_bases;
     for (u32 i = 0; i < count; ++i) {
@@ -547,9 +634,28 @@ static void write_records(const struct arrays *a, u32 pixels)
            reserved zero bytes. */
         copy(at(record + GRKIT_RECORD_FEATURES), profile + GRKIT_GRF_FEATURES, GRKIT_GRF_FEATURES_SIZE);
         copy(at(record + GRKIT_RECORD_POST), profile + GRKIT_GRF_POST, GRKIT_GRF_MATRIX - GRKIT_GRF_POST);
-        if (get32(profile + GRKIT_GRF_FEATURES) & GRKIT_FEATURE_HUE) multiaxial(record, profile);
-        /* Neutral Fn adjustments until the loader restores the saved ones. */
+        if (get32(profile + GRKIT_GRF_FEATURES) & (GRKIT_FEATURE_HUE | GRKIT_FEATURE_NATIVE_LOOK)) multiaxial(record, profile);
+        /* Neutral Fn adjustments until the loader restores the saved ones, and
+           the defaults that they change: those of feature 64, as values mod 9
+           like a stored adjustment, else zero. */
         zero(at(record + GRKIT_RECORD_PARAMETERS), 9);
+        for (u32 k = 0; k < 9; ++k) {
+            int value = (get32(profile + GRKIT_GRF_FEATURES) & GRKIT_FEATURE_FN_DEFAULTS)
+                ? (signed char)profile[GRKIT_GRF_FN_DEFAULTS + k] : 0;
+            at(record + GRKIT_RECORD_FN_DEFAULTS + k)[0] = (u8)(value < 0 ? value + 9 : value);
+        }
+        /* Toning (runtime/toning.h): a native look whose red or blue curve
+           differs from green keeps those curves in the next tail slot, and
+           starts at its own toning. */
+        zero(at(record + GRKIT_RECORD_TONING), 2);
+        if ((get32(profile + GRKIT_GRF_FEATURES) & GRKIT_FEATURE_NATIVE_LOOK) && tone_slots < GRKIT_TONE_SLOTS &&
+            !(grf_equal(profile + GRKIT_GRF_CURVES, profile + GRKIT_GRF_CURVES + 512, 512) &&
+              grf_equal(profile + GRKIT_GRF_CURVES + 1024, profile + GRKIT_GRF_CURVES + 512, 512))) {
+            u32 slot = a->tail + GRKIT_TONE_CURVES + tone_slots * GRKIT_TONE_SLOT_SIZE;
+            copy(at(slot), profile + GRKIT_GRF_CURVES, 512);
+            copy(at(slot + 512), profile + GRKIT_GRF_CURVES + 1024, 512);
+            at(record + GRKIT_RECORD_TONE_SLOT)[0] = (u8)++tone_slots;
+        }
         u32 n = length((const char *)profile + CATALOG_EFFECT_NAME);
         for (u32 j = 0; j < n; ++j) at(record + GRKIT_RECORD_NAME + j * 2)[0] = profile[CATALOG_EFFECT_NAME + j];
         store(record + GRKIT_RECORD_MONOCHROME, get32(profile + GRKIT_GRF_FLAGS));
@@ -586,26 +692,27 @@ static void write_host_icons(const struct arrays *a, u32 pixels)
 {
     u32 base = a->base;
     /* Host artwork does not consume an effect record or a native settings ID.
-       It comes first in chunk 0: Off, the GRKit tile, the Version tile, then
-       the Modules tile. */
-    _Static_assert(HOST_ICON_COUNT == 4, "The host icons are Off, GRKit, Version, and Modules");
+       It comes first in chunk 0: Off, the GRKit tile, the Version tile, the
+       Modules tile, the Modules tile of Enable GRKit Off, then the Fn hint
+       of a row where Fn turns a setting. */
+    _Static_assert(HOST_ICON_COUNT == 6, "The host icons are Off, GRKit, Version, Modules, Modules Off, and Rotate");
     for (u32 i = 0; i < HOST_ICON_COUNT; ++i) {
         u32 icon = a->icon_bases[0] + i * ICON_STRIDE;
-        static const u8 *const artwork[HOST_ICON_COUNT] = {off_pixels, grkit_pixels, version_pixels, modules_pixels};
+        static const u8 *const artwork[HOST_ICON_COUNT] = {off_pixels, grkit_pixels, version_pixels, modules_pixels,
+                                                                 modules_off_pixels, rotate_pixels};
         icon_header(icon, pixels);
         copy(at(icon + ICON_PIXELS), artwork[i], 6400);
-        /* The menu derives the Version and Modules icons from the GRKit icon. */
+        /* The menu derives the icons after the GRKit icon from its
+           address. */
         if (i < 2) store(base + (i ? GRKIT_HOST_GRKIT_ICON : GRKIT_HOST_OFF_ICON), icon);
     }
 }
 
 /* Link the modules and register them in the header. */
-static int write_modules(const struct arrays *a, u32 pixels)
+static int write_modules(const struct arrays *a, u32 pixels, u32 code)
 {
     u32 base = a->base;
     int status;
-    u32 code = relocated[TAIL_SYMBOL] + TAIL_BYTES;
-    if (code + module_code_bytes > RTOS_EXECUTABLE_END) return GRM_NO_ROOM;
     if ((status = install_modules(code, a->module_array, pixels, a->icon_bases))) return status;
     needed_points |= POINT_MENU_PAGE;
     store(base + GRKIT_HOST_MANAGE, module_list);
@@ -616,7 +723,10 @@ static int write_modules(const struct arrays *a, u32 pixels)
     store(base + GRKIT_HOST_MODULE_PAGE_COUNT, module_page_count);
     for (u32 i = 0; i < module_page_count * 3; ++i) store(base + GRKIT_HOST_MODULE_PAGES + i * 4, module_pages[i]);
     store(base + GRKIT_HOST_MODULE_LAYER_COUNT, module_layer_count);
-    for (u32 i = 0; i < module_layer_count * 3; ++i) store(base + GRKIT_HOST_MODULE_LAYERS + i * 4, module_layers[i]);
+    for (u32 i = 0; i < module_layer_count * 4; ++i) store(base + GRKIT_HOST_MODULE_LAYERS + i * 4, module_layers[i]);
+    store(base + GRKIT_HOST_LEGACY_TONE_OWNER, module_legacy_tone_owner);
+    store(base + GRKIT_HOST_INDICATOR_COUNT, module_indicator_count);
+    for (u32 i = 0; i < module_indicator_count * 2; ++i) store(base + GRKIT_HOST_INDICATORS + i * 4, module_indicators[i]);
     store(base + GRKIT_HOST_MODULE_FILTER_COUNT, module_filter_count);
     for (u32 i = 0; i < module_filter_count * 2; ++i) store(base + GRKIT_HOST_MODULE_FILTERS + i * 4, module_filters[i]);
     return 0;
@@ -664,8 +774,15 @@ static int publish_patches(void)
 static int install(void)
 {
     struct arrays arrays;
+    u32 module_start;
     int status = read_plan();
     if (status) return status;
+    /* The checks of the firmware read only memory, so an attempt before the
+       camera is ready ends before it reads the modules from the card. */
+    if ((status = relocate())) return status;
+    if ((status = check_firmware())) return status;
+    u32 pixels = icon_pixels();
+    if (!pixels) return STATUS_ICONS_NOT_READY;
     /* The loaded modules add the points that they need (install_modules). */
     needed_points = 0;
     /* The modules of SCAN, which the loader reserved memory for. */
@@ -675,11 +792,8 @@ static int install(void)
     if (get32(plan + GRKIT_PLAN_HEADER_WORDS) != size / 4 || get32(plan + GRKIT_PLAN_ICON_CHUNKS) != icon_chunks ||
         get32(plan + GRKIT_PLAN_MODULE_WORDS) != module_words || get32(plan + GRKIT_PLAN_MODULE_TILES) != module_tiles)
         return STATUS_PLAN;
-    if ((status = relocate())) return status;
+    if ((status = plan_code(relocated[TAIL_SYMBOL], TAIL_BYTES, CODE_END, &module_start))) return status;
     if ((status = check_arrays(&arrays))) return status;
-    if ((status = check_firmware())) return status;
-    u32 pixels = icon_pixels();
-    if (!pixels) return STATUS_ICONS_NOT_READY;
     write_header(&arrays);
 #ifndef GRKIT_NO_IMAGE_CONTROL
     write_records(&arrays, pixels);
@@ -687,7 +801,7 @@ static int install(void)
     write_host_icons(&arrays, pixels);
     /* The GRKit section of MENU lists each module, also when none loads, so
        the menu hooks install with a listed module. */
-    if (module_count && (status = write_modules(&arrays, pixels))) return status;
+    if (module_count && (status = write_modules(&arrays, pixels, module_start))) return status;
     /* The profile table: the code range and the name of each module that
        loaded, and counters at 0 (the tail holds noise after power-on). */
     if (profile_mode) write_profile(&arrays);
@@ -713,7 +827,7 @@ static int select_profile(const char *id)
     relocation.window_at = window_at;
     relocation.symbol_at = relocated;
     if (!relocation_resolve(&relocation_tables, &relocation)) return STATUS_RELOCATION;
-    u32 base = word(ARRAY_TABLE + 4);
+    u32 base = word(ARRAYS + 4);
     if (!heap(base, GRKIT_HOST_HEADER_SIZE) || word(base + GRKIT_HOST_MAGIC) != GRKIT_HOST_MAGIC_VALUE || word(base + GRKIT_HOST_VERSION) != GRKIT_HOST_VERSION_VALUE) return STATUS_NO_HEADER;
     u32 n = word(base + GRKIT_HOST_COUNT), records = word(base + GRKIT_HOST_RECORDS), selected = 0;
     if (n > MAX_COUNT || records != base + GRKIT_HOST_HEADER_SIZE || !heap(base, GRKIT_HOST_HEADER_SIZE + n * GRKIT_RECORD_SIZE)) return STATUS_NO_HEADER;
@@ -731,6 +845,7 @@ static int select_profile(const char *id)
 }
 #endif
 /* Create an empty file only when it is absent. */
+#ifndef RTOS_NATIVE
 /* Create a result file. A nonzero status is written as decimal text, so a
    card from a camera shows why INSTALL failed. It replaces the status that
    the loader wrote before the step. A file without a status is created only
@@ -765,6 +880,7 @@ static int create(const char *path, u32 status)
     syscall6(6, fd, 0, 0, 0, 0, 0);
     return 1;
 }
+#endif
 #include "install_report.h"
 /* Native state that the camera is still initializing. Other failures are final. */
 static int not_ready(int status)
@@ -812,9 +928,15 @@ static int other_build(enum install_mode mode)
     syscall6(6, fd, 0, 0, 0, 0, 0);
     return other;
 }
+#ifdef RTOS_NATIVE
+__attribute__((used)) int grkit_install_entry(u32 argc, char **argv)
+{
+    int status = STATUS_USAGE;
+#else
 __attribute__((used)) void start(u32 *stack)
 {
     u32 argc = stack[0]; char **argv = (char **)(stack + 1); int status = STATUS_USAGE;
+#endif
     enum install_mode mode = INSTALL_LAST;
     if (argc == 2 && text_equal(argv[1], "--known")) mode = INSTALL_KNOWN;
     else if (argc == 2 && text_equal(argv[1], "--try")) mode = INSTALL_TRY;
@@ -828,8 +950,12 @@ __attribute__((used)) void start(u32 *stack)
         long fd = -1;
         int other = mode != INSTALL_LAST && other_build(mode);
         if (other) status = mode == INSTALL_KNOWN ? STATUS_OTHER_BUILD : STATUS_RELOCATION;
-        /* The lock admits one install attempt at a time and stays after a result. */
+#ifndef RTOS_NATIVE
+        /* The lock admits one install attempt at a time and stays after a
+           result. On the RTOS side, the loader calls INSTALL once at a time
+           and reads its status from the script array. */
         else if (argc == 2 && !create(lock_path, 0)) status = STATUS_BUSY;
+#endif
         else if ((fd = syscall6(5, (u32)"/dev/mem", 0x101002, 0, 0, 0, 0)) < 0) status = STATUS_NO_MEMORY;
         else {
             long mapped = syscall6(192, 0, MAP_SIZE, 3, 1, fd, MAP_BASE >> 12);
@@ -847,14 +973,23 @@ __attribute__((used)) void start(u32 *stack)
         /* The loader polls these files: retry after not-ready, stop after a result.
            Another build leaves the next installer to run. */
         if (argc == 2 && status != STATUS_BUSY && !other) {
+#ifdef RTOS_NATIVE
+            if (!not_ready(status)) write_report(status);
+#else
             if (not_ready(status)) syscall6(10, (u32)lock_path, 0, 0, 0, 0, 0);
             else {
                 write_report(status);
                 create(status ? failed_path : done_path, status);
             }
+#endif
         }
     }
     if (status) { print("GR_MODULE_REJECTED "); number(status); print("\n"); }
+#ifdef RTOS_NATIVE
+    return status;
+}
+#else
     syscall6(1, status, 0, 0, 0, 0, 0); for (;;) {}
 }
 __attribute__((naked)) void _start(void) { __asm__ volatile("mov r0, sp\nb start"); }
+#endif

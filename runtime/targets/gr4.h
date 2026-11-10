@@ -19,6 +19,18 @@
    native Image Control type at +0x79c. Standard is type 11. The shot settings
    hold the type at the same offset as the settings payload. */
 #define SETTINGS_IC_TYPE 0x79c
+/* The digital filter values of the shot settings, which the grain stage of
+   recorded pictures reads: Shading and Clarity (0 to 8, 4 is neutral), grain
+   on (0 is off), and the HDR Tone strength (0 is off). The native parameter
+   build writes them for its Image Control type. */
+#define SETTINGS_SHADING 0x7b3
+#define SETTINGS_CLARITY 0x7b4
+#define SETTINGS_GRAIN 0x7b5
+#define SETTINGS_HDR 0x7b8
+/* The ImageTone code of the first look of GR IV Monochrome. Its looks record
+   0x8100 and up, in the order Standard, Solid, Soft, Hi-Contrast, Grainy,
+   HDR Tone, and Solarized Effect (types 25, 29, 26, 27, 28, 30, and 32). */
+#define NATIVE_TONE_MONOCHROME 0x8100U
 /* Framing: the rows of every family (runtime/firmware.h). GR IV has the
    native aspects 3:2, 4:3, 16:9, and 1:1, but Framing crops each ratio from
    native 3:2, as on GR III, so each ratio has the same live view. 16:9,
@@ -74,6 +86,49 @@
 #define CLASSIFY_WIDTH r6
 #define CLASSIFY_CLASS r5
 #define CLASSIFY_RETURN ldm sp, {r3,r4,r5,r6,fp,sp,pc}
+/* RAW development (RawDevelopmentModel) of the photo in playback. The
+   playback metadata (FW_PLAYBACK_METADATA) holds the width and the height of
+   that photo at METADATA_SIZE, as u16 values 4 bytes apart. The development
+   aspect 0 develops the capture aspect that the DNG records, DEVELOP_SQUARE
+   is the native 1:1, and DEVELOP_NATIVE_ASPECTS has a bit for each capture
+   aspect id that the camera develops itself (all four). The initial-aspect
+   hook gets the model in DEVELOP_MODEL and the recorded capture aspect in
+   DEVELOP_ASPECT. */
+#define METADATA_SIZE 0x30
+/* The playback metadata also holds the time of that photo at METADATA_TIME
+   (build header), in the layout of GrkitDateTime (runtime/sdk/grkit.h).
+   RawDevelopmentModel has its state at DEVELOP_STATE: 0 while no
+   development runs. */
+#define DEVELOP_STATE 4
+#define DEVELOP_SQUARE 4
+/* The value of the Standard Image Control in the development (category 0). */
+#define DEVELOP_STANDARD 1
+/* The Image Control list of the development (RawDevelopmentParameterSetController):
+   the controller ID word, the ID of the list, the first instruction of the
+   row category, which its entry hook replaces, the subtitle of the list
+   (+0x160 of the controller, r4 in UpdateSubTitle), the subtitle of
+   RawDevelopmentTopController (r6), the list view, and the style and the
+   height of its row views. */
+#define CONTROLLER_ID 0x124
+#define DEVELOP_TONE_LIST 0x4000022U
+/* The ID of the aspect list of the development, and the first instruction
+   of the row value of the model, which its entry hook replaces. */
+#define DEVELOP_ASPECT_LIST 0x400001fU
+#define DEVELOP_ASPECT_VALUE_FIRST "mov ip, sp"
+#define DEVELOP_CATEGORY_FIRST "ldrb r3, [r0, #5]"
+#define DEVELOP_LIST_TITLE ldr r3, [r4, #0x160]
+#define DEVELOP_TOP_TITLE mov r3, r6
+#define DEVELOP_LIST_VIEW 0x168
+#define DEVELOP_ROW_STYLE 0x1aU
+#define DEVELOP_ROW_HEIGHT 0x3aU
+#define DEVELOP_NATIVE_ASPECTS 0xfU
+#define DEVELOP_MODEL r0
+#define DEVELOP_ASPECT r1
+/* Resize: the register of the source size at the end of its getter, and the
+   aspect that the resize job gives a 16:9 and a 4:3 source size. */
+#define RESIZE_SIZE r4
+#define RESIZE_JOB_WIDE 1
+#define RESIZE_JOB_NARROW 2
 
 /* View classes. Their vtables and object sizes equal those of GR III 2.10.
    The list's row vector (first and end pointers) and its shown row count. */
@@ -103,6 +158,9 @@
 #define DETAIL_BASE_KIND 0x19e
 #define MODEL_SNAPSHOT 3
 #define PARAMETER_KINDS {0,1,2,3,4,5,6,14,15}
+/* The last two of them, Shading and Clarity, for assembly (runtime/processing.h). */
+#define PARAMETER_KIND_SHADING 14
+#define PARAMETER_KIND_CLARITY 15
 #define DETAIL_EV_SUBPAGE 0x8c
 /* The native settings page of a GRKit root row, as on GR III: the MENU
    submenu Instant Review (0x20000d4, entry 11 of FW_SUBMENU_KINDS), its three
@@ -122,7 +180,17 @@
 #define ROW_TEXT_VIEW 0xf8
 /* The size of SelectMenuController, and the view type and the text view of
    CheckBoxListLineView (runtime/menu_settings.h). */
+/* The string view of the submenu title view (submenu +0x15c): the title
+   setter (1.11: 0x5357f2b0) sets the text ID of this view. */
+#define SUBMENU_TITLE_STRING 0xf0
 #define SELECT_MENU_SIZE 0x1e4U
+/* The fewest row views of a SelectMenuController. Its constructor builds a
+   view for each row of its longest kind (+0x1a5). The longest native kind has
+   21 rows on each build, and no GRKit hook borrows it (1.11: kind table
+   0x53da2d20). The firmware can build the controller before INSTALL, so a
+   value page on it shows at most these rows. A long value page shows on an
+   own controller (runtime/menu_settings.h). */
+#define SELECT_MENU_ROWS 21U
 #define CHECK_LINE_TYPE 0x2aU
 #define CHECK_TEXT_VIEW 0xf0
 #define ROW_VALUE_VIEW 0xfc
@@ -187,7 +255,8 @@
 #define FN_GUIDE_X 300
 #define ADJ_LIST 0x1f8
 #define ADJ_SLOT 0x1fc
-#define ADJ_ACTION 0x281
+/* 1 while the held Fn action of an ADJ slot runs. */
+#define ADJ_FN_HELD 0x281
 
 /* AdjModeController events (the first halfword of an event). Measured, except
    the dial events, which follow the +6 offset of the direction events. The
@@ -246,5 +315,37 @@
 
 /* Each native aspect has its own visible area in a preview picture. */
 #define PICTURE_NATIVE_ID(native) ((native)<=3 ? (native) : 0)
+
+/* The shooting data of a shot (picture_shot), at these offsets from its shot
+   settings pointer: the data that the camera writes into the EXIF of the
+   picture. The exposure is in APEX values (float): Av, Tv, and Sv, then the
+   exposure compensation. A time or bulb exposure
+   (SHOT_LONG_MODE values SHOT_LONG_FIRST and the next) holds its time in
+   microseconds (u64) at SHOT_TIME; another shot holds it there (u32) when the
+   byte SHOT_TIME_SET is set. The capture time: the year (u16), then the
+   month, the day, a gap, the hour, the minute, and the second. The focal
+   length is a float in mm; times 1.5339 (runtime/picture.c) and the crop
+   factor (float) at SHOT_CROP, it is the focal length of 35 mm film. The flash: on
+   (byte), its mode (byte, 1 or 3 with red-eye reduction), and fired (byte).
+   The program and the metering are bytes of the settings of the shot, with
+   their EXIF codes. */
+#define SHOT_SETTINGS 0x6e4
+#define SHOT_APEX 0xb98
+#define SHOT_TIME 0x940
+#define SHOT_TIME_SET 0x974
+#define SHOT_LONG_MODE (SHOT_SETTINGS + 0x8c)
+#define SHOT_LONG_FIRST 9
+#define SHOT_TAKEN 0x96c
+#define SHOT_FOCAL 0x6b4
+#define SHOT_CROP 0x7dc
+/* DNGMetaDataWriter::TiffEntryDataSetter: RAW image info and shot metadata. */
+#define DNG_SETTER_INFO 0x8c
+#define DNG_SETTER_SHOT 0x94
+#define SHOT_FLASH_ON 0xf8
+#define SHOT_FLASH_MODE 0x780
+#define SHOT_FLASH_FIRED 0x71b08
+#define SHOT_PROGRAM (SHOT_SETTINGS + 0x15a)
+#define SHOT_PROGRAM_CODES 2,4,3,0,1,1,1,2
+#define SHOT_METERING (SHOT_SETTINGS + 0x8f)
 
 #endif

@@ -34,15 +34,15 @@ RECIPES = {
     "ektar-100-edge-v1": ("kodak_ektar_100", "kodak_ektacolor_edge"),
     "pro-400h-crystal-v1": ("fujifilm_pro_400h", "fujifilm_crystal_archive_typeii"),
     "xtra-400-crystal-v1": ("fujifilm_xtra_400", "fujifilm_crystal_archive_typeii"),
-    "c200-crystal-v1": ("fujifilm_c200", "fujifilm_crystal_archive_typeii"),
-    "ultramax-400-premier-v1": ("kodak_ultramax_400", "kodak_endura_premier"),
     "vision3-250d-2383-v1": ("kodak_vision3_250d", "kodak_2383"),
     "vision3-500t-supra-v1": ("kodak_vision3_500t", "kodak_supra_endura"),
     "portra-800-push2-v1": ("kodak_portra_800_push2", "kodak_portra_endura"),
     "kodachrome-64-v1": ("kodak_kodachrome_64", "kodak_portra_endura"),
     "velvia-100-v1": ("fujifilm_velvia_100", "kodak_portra_endura"),
-    "provia-100f-v1": ("fujifilm_provia_100f", "kodak_portra_endura"),
     "ektachrome-e100-v1": ("kodak_ektachrome_100", "kodak_portra_endura"),
+    "c200-premier-v1": ("fujifilm_c200", "kodak_endura_premier"),
+    "ultramax-400-ultra-v1": ("kodak_ultramax_400", "kodak_ultra_endura"),
+    "provia-100f-v1": ("fujifilm_provia_100f", "kodak_portra_endura"),
 }
 
 # Effects whose print is scanned with fixed black and white levels.

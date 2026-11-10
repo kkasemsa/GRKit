@@ -7,6 +7,49 @@
 /* Picture processing hooks for effect extensions. They link into the Framing
    region. */
 
+/* Only the DNG writer's crop tags call these stubs. Keep native validation
+   and unsupported entry types, then restore the RAW crop of a Framing shot. */
+.global picture_dng_origin
+picture_dng_origin:
+    push {r0,r1,r4,lr}
+    ldr r12, =HOOK_PICTURE_DNG_ORIGIN_TARGET
+    blx r12
+    mov r2, #0
+    b .Ldng_crop
+.global picture_dng_size
+picture_dng_size:
+    push {r0,r1,r4,lr}
+    ldr r12, =HOOK_PICTURE_DNG_SIZE_TARGET
+    blx r12
+    mov r2, #1
+.Ldng_crop:
+    pop {r0,r1,r4,lr}
+    b picture_dng_crop
+
+/* C uses soft-float; the native rectangle helper takes crop in s0 and
+   aspect on the stack. rect is {width,height,absolute x,absolute y}. */
+.fpu vfpv3
+.thumb
+.thumb_func
+.global picture_dng_rect
+picture_dng_rect:
+    push {r4,lr}
+    sub sp, sp, #8
+    mov r4, r1
+    add r0, r0, #(SHOT_CROP & ~0xff)
+    vldr s0, [r0, #(SHOT_CROP & 0xff)]
+    movs r0, #0
+    str r0, [sp]
+    mov r0, r4
+    adds r1, r4, #2
+    adds r2, r4, #4
+    adds r3, r4, #6
+    ldr r4, =FW_DNG_NATIVE_RECT
+    blx r4
+    add sp, sp, #8
+    pop {r4,pc}
+.arm
+
 #ifdef HOOK_MODULE_GAMMA_DIRTY
 // Z=1 only for an owned record in r0. Preserves all registers.
 picture_owned:
@@ -77,9 +120,11 @@ dirty_resume:
    recorded pictures only. SetEffectParameter reads the grain settings from the
    shot settings (r4 on GR IV, r5 on GR III); these hooks replace each load with
    the Grain level, and Off keeps the native value. The stage gate ignores grain
-   for Standard, so the gate wrapper turns the stage on for any level. Extra
-   Strong (level 4) takes the native strong grain, and the amplitude hooks
-   scale its tables by GRAIN_EXTRA / 256. */
+   for Standard, so the gate wrapper turns the stage on for any level. The gate
+   runs before the parameter build of the shot, so for a GRKit effect it reads
+   the Shading and Clarity of the native type; the wrapper decides from the
+   record instead (picture_gate_flag). Extra Strong (level 4) takes the native
+   strong grain, and the amplitude hooks scale its tables by GRAIN_EXTRA / 256. */
 #ifndef GRAIN_EXTRA
 #define GRAIN_EXTRA 384
 #endif
@@ -106,6 +151,11 @@ grain_gate:
     push {r0, lr}
     ldr r12, =HOOK_GRAIN_GATE_TARGET
     blx r12
+    ldr r0, [sp]
+    ldrb r0, [r0, #GRAIN_GATE_FLAG]
+    bl picture_gate_flag
+    ldr r1, [sp]
+    strb r0, [r1, #GRAIN_GATE_FLAG]
     bl grain_level
     pop {r0, lr}
     movls r3, #1
@@ -269,12 +319,13 @@ grain_fill:
 /* Capture: record the effect of this shot as the Image Control tag. Replaces
    the ImageTone BL in PentaxMakernoteEntryDataSetter. r1 is the IFD entry, and
    r2 the shot settings. FW_IFD_SET_SHORT(entry, 0, value) stores the u16 tag
-   value. A shot without a private record keeps the native tag. */
+   value. A shot without a private record keeps the native tag. A playback
+   edit keeps the effect of its photo (picture_capture_tone_record). */
 .global picture_capture_tone
 picture_capture_tone:
     push {r0-r4, lr}
     mov r0, r2
-    bl picture_capture_record
+    bl picture_capture_tone_record
     mov r12, r0
     pop {r0-r4, lr}
     cmp r12, #0
@@ -284,6 +335,31 @@ picture_capture_tone:
     add r12, r12, #(GRKIT_RECORD_CODE & ~0xff)
     ldrh r2, [r12, #(GRKIT_RECORD_CODE & 0xff)]
     ldr pc, =FW_IFD_SET_SHORT
+
+/* JPEG header setup of a write and of an in-camera rewrite: the BL to the
+   APP1 Exif setup, r0 = writer, r1 = image information. After a successful
+   setup, picture_jpeg_xmp (picture.c) adds the XMP segment of the look before
+   APP7. The setup result returns. */
+.macro JPEG_HEADER_STUB name, target
+.global \name
+\name:
+    push {r0, r1, r4, lr}
+    ldr r12, =\target
+    blx r12
+    movs r4, r0
+    beq 1f
+    ldr r0, [sp]
+    bl picture_jpeg_xmp
+1:  mov r0, r4
+    add sp, sp, #8
+    pop {r4, pc}
+.endm
+#ifdef HOOK_PICTURE_JPEG_HEADER_TARGET
+JPEG_HEADER_STUB picture_jpeg_header, HOOK_PICTURE_JPEG_HEADER_TARGET
+#endif
+#ifdef HOOK_PICTURE_JPEG_REWRITE_TARGET
+JPEG_HEADER_STUB picture_jpeg_rewrite, HOOK_PICTURE_JPEG_REWRITE_TARGET
+#endif
 
 /* Capture: the maker-note adjustments (tag 0x247) of a GRKit shot. Replaces
    the BL to the native fill: r0 = the setter + 8, r1 is the IFD entry, and r2
@@ -310,3 +386,16 @@ picture_encode_entry:
     mov r12, sp
     ldr pc, =HOOK_PICTURE_ENCODE_ENTRY_RESUME
 .ltorg
+
+#ifdef HOOK_PICTURE_DEVELOP_TONE
+/* The start of a RAW development: this replaces the BL that gives its initial
+   Image Control. picture_develop_start (runtime/picture.c) sets the effect and
+   clears the Framing ratio of the development, then the native conversion
+   runs. */
+.global picture_develop_tone
+picture_develop_tone:
+    push {r0-r3,r12,lr}
+    bl picture_develop_start
+    pop {r0-r3,r12,lr}
+    ldr pc, =HOOK_PICTURE_DEVELOP_TONE_TARGET
+#endif

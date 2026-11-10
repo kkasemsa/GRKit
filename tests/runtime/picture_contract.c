@@ -37,6 +37,17 @@ static unsigned flushes, native_aspect;
 #define PICTURE_DATE(out) do { uint8_t *d = (uint8_t *)(out); d[0] = 2026 & 255; d[1] = 2026 >> 8; \
     d[2] = 10; d[3] = 17; d[4] = 9; d[5] = 5; } while (0)
 #define PICTURE_NATIVE_ASPECT() native_aspect
+/* A RAW development runs while `developing` is set. The DNG in playback was
+   taken on 2025-01-01 12:02:11. `photo_unset` 1 gives metadata without a
+   time, 2 other bytes at the place of the time. */
+static unsigned developing, photo_unset;
+#define PICTURE_DEVELOPING() developing
+/* The EXIF Orientation of that DNG. */
+static unsigned photo_orientation = 1;
+#define PICTURE_PHOTO_ORIENTATION() photo_orientation
+#define PICTURE_PHOTO_TIME(out) do { uint8_t *d = (uint8_t *)(out); memset(d, 0, 8); if (!photo_unset) { \
+    d[0] = 2025 & 255; d[1] = 2025 >> 8; d[2] = 1; d[3] = 1; d[4] = 12; d[5] = 2; d[6] = 11; } \
+    else if (photo_unset == 2) { d[0] = 12; d[1] = 2; d[2] = 14; } } while (0)
 /* Stamp mask scratch, clear of the planes. */
 #define SCRATCH (ARENA + 0x500000)
 #define PICTURE_SCRATCH(h) ((void)(h), SCRATCH)
@@ -46,6 +57,10 @@ static unsigned flushes, native_aspect;
 static uint32_t ifd_entry, ifd_writes, ifd_values[32];
 #define PICTURE_IFD_SET_SHORT(entry,index,value) do { assert((index) < 32 && !((value) >> 16)); \
     ifd_entry = (entry); ifd_values[(index)] = (value); ++ifd_writes; } while (0)
+#define PICTURE_IFD_SET_LONG(entry,index,value) PICTURE_IFD_SET_SHORT(entry,index,value)
+static uint16_t dng_rect[4];
+static uint32_t dng_rect_shot, dng_rect_calls;
+#define PICTURE_DNG_RECT(shot,rect) do { dng_rect_shot = (shot); ++dng_rect_calls; memcpy((rect),dng_rect,sizeof(dng_rect)); } while (0)
 /* The module settings: those of Date Imprint, STYLE (handle 0, 6 values) and
    LOOK (handle 1, 3 values). */
 #define TEST_SETTINGS 0x5f000000U
@@ -63,6 +78,8 @@ static volatile uint32_t *mapped_settings(uint32_t address)
 /* The plane filter of Date Imprint (modules/date): the harness maps its
    apply address to the module function. */
 #define TEST_DATE_APPLY 0x5e000031U
+#define TEST_FRAME_APPLY 0x5e000035U
+static unsigned frame_calls[2];
 static void test_apply(uint32_t address, void *set, uint32_t value);
 #define MODULE_APPLY(address,set,value) test_apply(address,set,value)
 /* The GR III noise fill: the native fill writes 0x77, the allocator hands out
@@ -80,6 +97,15 @@ static uint32_t grain_counter_value, grain_counter_step;
 #define GRAIN_COUNTER_MHZ 24U
 #define TEST_PROFILE (ARENA + 0x4f0000)
 #define PROFILE_MAP(address) ((volatile u32 *)region((address), 4))
+/* Key 0x25 of the playback metadata: the ImageTone code of the photo shown. */
+static uint32_t playback_tone;
+#define PICTURE_PLAYBACK_TONE() playback_tone
+/* The JPEG header buffer of the XMP segment (runtime/xmp.h). */
+#define PICTURE_JPEG_MAP(address,size) ((volatile u8 *)region((address), (size)))
+/* The Standard parameter set of the development model (runtime/develop.h),
+   one byte for each parameter kind. */
+static uint8_t develop_set[17];
+#define DEVELOP_SET(kind) develop_set[(kind)]
 #include "picture.c"
 
 static volatile u32 header[GRKIT_HOST_HEADER_SIZE / 4];
@@ -89,7 +115,8 @@ volatile u32 *framing_header(void) { return header; }
 #include "../../modules/date/stamp.c"
 const GrkitContext grkit_self = {0, 2, 0};
 u32 setting_get(u32 handle) { return setting_value(header, handle); }
-void local_time(GrkitDateTime *out) { PICTURE_DATE(out); }
+/* The module gets the time through the export of the core, as on the camera. */
+void local_time(GrkitDateTime *out) { grkit_export_local_time((u8 *)out); }
 /* The live-view sign of the module (date_badge). This test checks pictures,
    so the label draws nothing. */
 static void overlay_label(const Surface *s,u32 label,u32 left,u32 top) { (void)s; (void)label; (void)left; (void)top; }
@@ -98,6 +125,11 @@ u32 divide(u32 n, u32 d) { return core_divide(n, d); }
 static uint32_t applied_turns = 0xffffffffU;
 static void test_apply(uint32_t address, void *set, uint32_t value)
 {
+    if (address == TEST_FRAME_APPLY || address == TEST_FRAME_APPLY + 4) {
+        assert(value == 1);
+        ++frame_calls[(address - TEST_FRAME_APPLY) / 4];
+        return;
+    }
     assert(address == TEST_DATE_APPLY);
     applied_turns = ((PictureSet *)set)->turns;
     date_apply(set, value);
@@ -149,6 +181,66 @@ static void keep_red(uint32_t r)
     BYTE(r, GRKIT_RECORD_SELECTIVE + 13) = 16;
 }
 
+/* The coefficients of CSP x S x P, rounded as post_matrix rounds them. */
+static void composed(const int *s, const short *p, int *out)
+{
+    int sp[9];
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
+        int sum = 0;
+        for (int k = 0; k < 3; ++k) sum += s[i * 3 + k] * (p ? p[k * 3 + j] : (k == j) * 8192);
+        sp[i * 3 + j] = (sum + 4096) >> 13;
+    }
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
+        int sum = 0;
+        for (int k = 0; k < 3; ++k) sum += bt601[i * 3 + k] * sp[k * 3 + j];
+        sum = (sum + 4096) >> 13;
+        out[i * 3 + j] = sum < -256 ? -256 : sum > 255 ? 255 : sum;
+    }
+}
+/* A native look on GR III applies saturation after the tone curves, as GR IV
+   does: the BT.601 matrices with 8-bit fractions, and 1.1 to the power of the
+   level, rounded to three decimals. Other cameras keep the native matrix. */
+static void native_saturation_contract(const short *swap)
+{
+    static const double rgb[9] = {1, 0, 359 / 256.0, 1, -88 / 256.0, -183 / 256.0, 1, 454 / 256.0, 0};
+    static const double ycbcr[9] = {77 / 256.0, 150 / 256.0, 29 / 256.0, -43 / 256.0, -85 / 256.0,
+        128 / 256.0, 128 / 256.0, -107 / 256.0, -21 / 256.0};
+    for (int level = -4; level <= 4; ++level) {
+        double factor = 1;
+        for (int n = 0; n < (level < 0 ? -level : level); ++n) factor = level < 0 ? factor / 1.1 : factor * 1.1;
+        factor = (double)(long)(factor * 1000 + 0.5) / 1000;
+        int s[9], expected[9];
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
+            double v = 512 * (rgb[i * 3] * ycbcr[j] + factor * (rgb[i * 3 + 1] * ycbcr[3 + j] + rgb[i * 3 + 2] * ycbcr[6 + j]));
+            s[i * 3 + j] = (int)(v < 0 ? v - 0.5 : v + 0.5) * 16;
+        }
+        /* The default is -2 (7 mod 9), and the stored change moves it to the level. */
+        reset();
+        WORD(CONTEXT, 8) = record(1);
+        WORD(record(1), GRKIT_RECORD_FEATURES) = GRKIT_FEATURE_NATIVE_LOOK;
+        BYTE(record(1), GRKIT_RECORD_FN_DEFAULTS) = 7;
+        BYTE(record(1), GRKIT_RECORD_PARAMETERS) = (uint8_t)((level + 2 + 9) % 9);
+        picture_post(OBJECT, CONTEXT, SETTINGS);
+#ifdef NATIVE_SATURATION_BEFORE_CURVES
+        composed(s, 0, expected);
+        for (int i = 0; i < 9; ++i) assert(coefficient(i) == (level ? expected[i] : bt601[i]));
+        /* The saturation follows the post matrix of the effect. */
+        post(record(1), swap);
+        picture_post(OBJECT, CONTEXT, SETTINGS);
+        composed(s, swap, expected);
+        for (int i = 0; i < 9; ++i) assert(level ? coefficient(i) == expected[i] : coefficient(i) == bt601[i / 3 * 3 + 2 - i % 3]);
+#else
+        for (int i = 0; i < 9; ++i) assert(coefficient(i) == bt601[i]);
+#endif
+    }
+    /* Effects without a native look keep the native saturation. */
+    reset();
+    WORD(CONTEXT, 8) = record(1);
+    BYTE(record(1), GRKIT_RECORD_FN_DEFAULTS) = 7;
+    picture_post(OBJECT, CONTEXT, SETTINGS);
+    for (int i = 0; i < 9; ++i) assert(coefficient(i) == bt601[i]);
+}
+
 /* Encode configuration: four image and four code descriptors, then the planes. */
 #define MESSAGE (ARENA + 0x8300)
 #define CONFIG (ARENA + 0x8400)
@@ -183,6 +275,7 @@ static void store_posed(uint32_t shot, uint32_t r, uint32_t posture)
     WORD(entry, GRKIT_SHOT_KEY) = shot;
     WORD(entry, GRKIT_SHOT_RECORD) = r;
     WORD(entry, GRKIT_SHOT_POSTURE) = posture;
+    WORD(entry, GRKIT_SHOT_FRAME_CROP) = header[GRKIT_HOST_FRAME_CROP / 4];
     WORD(ring, 0) = n + 1;
 }
 static void store_shot(uint32_t shot, uint32_t r) { store_posed(shot, r, 1); }
@@ -198,6 +291,25 @@ static void encode_setup(void)
     /* Descriptor 3 is the second full-size encode of the main planes. */
     WORD(CONFIG, 0x48) = WORD(CONFIG, 0x3c); WORD(CONFIG, 0x58) = WORD(CONFIG, 0x4c);
     flushes = 0; native_aspect = 0;
+}
+/* Independent frame filters read their current settings on every encode. */
+static void frame_filter_switches(void)
+{
+    static const unsigned states[] = {0, 1, 3, 2, 0};
+    encode_setup();
+    header[GRKIT_HOST_MODULE_FILTER_COUNT / 4] = 2;
+    for (u32 i = 0; i < 2; ++i) {
+        header[GRKIT_HOST_MODULE_FILTERS / 4 + i * 2] = TEST_FRAME_APPLY + i * 4;
+        header[GRKIT_HOST_MODULE_FILTERS / 4 + i * 2 + 1] = GRKIT_STAGE_FRAME << 16 | i;
+    }
+    for (u32 i = 0; i < sizeof(states) / sizeof(*states); ++i) {
+        STAMP_STYLE = states[i] & 1;
+        STAMP_LOOK = (states[i] >> 1) & 1;
+        flushes = frame_calls[0] = frame_calls[1] = 0;
+        picture_encode(0, MESSAGE);
+        assert(frame_calls[0] == STAMP_STYLE && frame_calls[1] == STAMP_LOOK);
+        assert(flushes == (states[i] ? 12 : 0));
+    }
 }
 static void fill_planes(uint8_t luma, uint8_t cb, uint8_t cr)
 {
@@ -420,6 +532,17 @@ static void grain_contract(void)
             assert(!memcmp(plane, noise, size));
         }
     }
+    /* A row longer than the period of the two tiles (3840 samples), and more
+       rows than that period: the repeated samples are those of the model. */
+    for (uint32_t c = 0; c < 2; ++c) {
+        static const uint32_t pitch[2] = {4096, 48}, rows[2] = {4, 3850};
+        static uint8_t long_want[48 * 3850];
+        uint32_t size = pitch[c] * rows[c];
+        header[GRKIT_HOST_GRAIN_SHOT / 4] = 2;
+        grain_noise(GRAIN_PLANE, size, pitch[c], rows[c]);
+        ref_grain(long_want, pitch[c], rows[c], 3, 0x12345679U);
+        assert(!memcmp(plane, long_want, size));
+    }
     /* The profile counts the microseconds of the generic timer: two reads
        24000 ticks apart at 24 MHz are 1000 us. Without the profile, nothing
        is counted. */
@@ -446,12 +569,364 @@ static void grain_contract(void)
 }
 #endif
 
+/* picture_shot: the data of a shot, from the offsets of the target. */
+#define TEST_SHOT (ARENA + 0x300000)
+static uint32_t float_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static void shot_contract(void)
+{
+    struct { u32 size, known; int av, tv, sv, ev, xv; u32 us; u16 f, iso, focal, focal35; u8 program, metering; u16 flash;
+             u16 year; u8 month, day, hour, minute, second, reserved; } info;
+    PictureSet s;
+    reset();
+    memset(&s, 0, sizeof s);
+    /* No shot: only the size and no known field. */
+    memset(&info, 0xee, sizeof info);
+    info.size = sizeof info;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(sizeof info == GRKIT_SHOT_INFO_BYTES && info.size == sizeof info && info.known == 0 && info.av == 0);
+    /* f/2.8 (Av 3), 1/128 s (Tv 7), ISO 400 (Sv 7), -1/3 EV, 18.3 mm, at
+       2026-11-02 21:45:30, program and metering codes of index 1 and 0. */
+    s.shot = TEST_SHOT;
+    WORD(TEST_SHOT, SHOT_APEX) = float_bits(3.0f);
+    WORD(TEST_SHOT, SHOT_APEX + 4) = float_bits(7.0f);
+    WORD(TEST_SHOT, SHOT_APEX + 8) = float_bits(7.0f);
+    WORD(TEST_SHOT, SHOT_APEX + 12) = float_bits(-1.0f / 3);
+    WORD(TEST_SHOT, SHOT_FOCAL) = float_bits(18.3f);
+    WORD(TEST_SHOT, SHOT_CROP) = float_bits(1.0f);
+    HALF(TEST_SHOT, SHOT_TAKEN) = 2026;
+    BYTE(TEST_SHOT, SHOT_TAKEN + 2) = 11; BYTE(TEST_SHOT, SHOT_TAKEN + 3) = 2;
+    BYTE(TEST_SHOT, SHOT_TAKEN + 5) = 21; BYTE(TEST_SHOT, SHOT_TAKEN + 6) = 45; BYTE(TEST_SHOT, SHOT_TAKEN + 7) = 30;
+    BYTE(TEST_SHOT, SHOT_PROGRAM) = 1;
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(info.known == 0x7f);
+    assert(info.av == 768 && info.tv == 1792 && info.sv == 1792 && info.ev == 2048 && info.xv == -85);
+    assert(info.us >= 7811 && info.us <= 7814 && info.f == 28 && info.iso == 400);
+    assert(info.focal == 183 && info.focal35 == 28 && info.metering == 5 && info.flash == 0x10);
+    assert(info.year == 2026 && info.month == 11 && info.day == 2 && info.hour == 21 && info.minute == 45 && info.second == 30);
+    {
+        static const u8 codes[] = {SHOT_PROGRAM_CODES};
+        assert(info.program == codes[1]);
+    }
+    /* A 30 s time exposure: its time decides the shutter value (-4.91). */
+    BYTE(TEST_SHOT, SHOT_LONG_MODE) = SHOT_LONG_FIRST;
+    WORD(TEST_SHOT, SHOT_TIME) = 30000000; WORD(TEST_SHOT, SHOT_TIME + 4) = 0;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(info.us == 30000000 && info.tv >= -1258 && info.tv <= -1255);
+    /* The flash fired, with red-eye reduction. */
+    BYTE(TEST_SHOT, SHOT_FLASH_ON) = 1; BYTE(TEST_SHOT, SHOT_FLASH_MODE) = 3; BYTE(TEST_SHOT, SHOT_FLASH_FIRED) = 1;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(info.flash == 0x49);
+    /* An older, shorter GrkitShot: the core fills only its size. */
+    memset(&info, 0xee, sizeof info);
+    info.size = 12;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(info.size == 12 && info.known == 0x7f && info.av == 768 && info.tv == (int)0xeeeeeeee);
+    /* No exposure in a cleared shot. */
+    memset(region(TEST_SHOT, 0x72000), 0, 0x72000);
+    info.size = sizeof info;
+    grkit_export_picture_shot(&s, (u8 *)&info);
+    assert(!(info.known & 1) && info.known & 0x10);
+}
+static void composition_frames_keep_the_native_photo_area(void)
+{
+    static const u32 crop_areas[] = {0, 4, 2, 1, 5, 3, 6, 7};
+    struct box baseline[3];
+    encode_setup();
+    fill_planes(40, 128, 128);
+    STAMP_STYLE = 3;
+    picture_encode(0, MESSAGE);
+    for (u32 plane = 0; plane < 3; ++plane) baseline[plane] = changes(plane, 0);
+    for (u32 ratio = 1; ratio < 8; ++ratio) {
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = ratio;
+        header[GRKIT_HOST_CAPABILITIES / 4] |= GRKIT_CORE_ASPECT_MODE_BIT;
+        assert(shot_area(header) == crop_areas[ratio]);
+        header[GRKIT_HOST_ASPECT_MODE / 4] = 1;
+        assert(shot_area(header) == 0);
+        picture_encode(0, MESSAGE);
+        /* Every encoded size places the stamp as for the full native photo. */
+        for (u32 plane = 0; plane < 3; ++plane) {
+            struct box actual = changes(plane, 0), expected = baseline[plane];
+            assert(actual.lit == expected.lit && actual.left == expected.left && actual.top == expected.top);
+            assert(actual.right == expected.right && actual.bottom == expected.bottom);
+        }
+        header[GRKIT_HOST_CAPABILITIES / 4] &= ~GRKIT_CORE_ASPECT_MODE_BIT;
+        assert(shot_area(header) == crop_areas[ratio]);
+    }
+    /* A composition frame never overrides a native aspect chosen by the camera. */
+    header[GRKIT_HOST_CAPABILITIES / 4] |= GRKIT_CORE_ASPECT_MODE_BIT;
+    header[GRKIT_HOST_FRAME_RATIO / 4] = 1;
+    for (u32 native = 1; native < 4; ++native) {
+        native_aspect = native;
+        assert(shot_area(header) == PICTURE_NATIVE_ID(native));
+    }
+    native_aspect = 0;
+}
+
+static void dng_defaults_follow_the_shot_without_changing_jpeg_geometry(void)
+{
+    const u32 setter = ARENA + 0xa000, info = ARENA + 0xb000, entry = ARENA + 0xc000;
+    reset();
+    WORD(setter, DNG_SETTER_SHOT) = SHOT;
+    WORD(setter, DNG_SETTER_INFO) = info;
+    HALF(entry, 6) = 4;
+    WORD(entry, 8) = 2;
+    WORD(info, 8) = 58; WORD(info, 12) = 28;
+    WORD(info, 0x18) = 68; WORD(info, 0x1c) = 932;
+    WORD(info, 0x20) = 6000; WORD(info, 0x24) = 2216;
+    dng_rect[0] = 6000; dng_rect[1] = 4000;
+    dng_rect[2] = 68; dng_rect[3] = 40;
+    ifd_writes = dng_rect_calls = 0;
+    /* Missing snapshots and native shots keep the native tag setter's values. */
+    picture_dng_crop(setter, entry, 0);
+    store_shot(SHOT, 0);
+    picture_dng_crop(setter, entry, 1);
+    assert(!ifd_writes && !dng_rect_calls);
+    for (u32 crop = 1; crop < 8; ++crop) {
+        header[GRKIT_HOST_FRAME_CROP / 4] = crop;
+        store_shot(SHOT, 0);
+        /* The current selection has changed before this older shot is written. */
+        header[GRKIT_HOST_FRAME_CROP / 4] = 0;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = 0;
+        header[GRKIT_HOST_CAPABILITIES / 4] = 0;
+        picture_dng_crop(setter, entry, 0);
+        assert(ifd_values[0] == 10 && ifd_values[1] == 12 && dng_rect_shot == SHOT);
+        picture_dng_crop(setter, entry, 1);
+        assert(ifd_values[0] == 6000 && ifd_values[1] == 4000);
+        assert(WORD(info, 0x1c) == 932 && WORD(info, 0x24) == 2216);
+    }
+    /* Native rectangle computation retains the shot's digital crop. */
+    dng_rect[0] = 4800; dng_rect[1] = 3200;
+    dng_rect[2] = 668; dng_rect[3] = 440;
+    picture_dng_crop(setter, entry, 0);
+    assert(ifd_values[0] == 610 && ifd_values[1] == 412);
+    picture_dng_crop(setter, entry, 1);
+    assert(ifd_values[0] == 4800 && ifd_values[1] == 3200);
+    u32 writes = ifd_writes;
+    HALF(entry, 6) = 3;
+    picture_dng_crop(setter, entry, 0);
+    HALF(entry, 6) = 4; WORD(entry, 8) = 1;
+    picture_dng_crop(setter, entry, 1);
+    assert(ifd_writes == writes);
+    WORD(entry, 8) = 2;
+    /* A reused key must use its newest snapshot, including a later native shot. */
+    store_shot(SHOT, 0);
+    picture_dng_crop(setter, entry, 1);
+    assert(ifd_writes == writes);
+    for (u32 i = 0; i < GRKIT_SHOT_ENTRIES; ++i) store_shot(SHOT + 0x100 + i * 4, 0);
+    picture_dng_crop(setter, entry, 1);
+    assert(ifd_writes == writes);
+}
+
+/* The XMP segment of a JPEG header (runtime/xmp.h, picture_jpeg_xmp). The
+   header buffer holds a TIFF block whose Ricoh maker note gives ImageTone. */
+#define JPEG_WRITER (ARENA + 0x30000)
+#define JPEG_BUFFER (ARENA + 0x40000)
+#define JPEG_APP7 0x100U
+static void put16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void put32(uint8_t *p, uint32_t v) { put16(p, v); put16(p + 2, v >> 16); }
+static void jpeg_header(uint32_t code, uint32_t size)
+{
+    uint8_t *t = (uint8_t *)region(JPEG_BUFFER, size);
+    memset(t, 0xff, size);
+    t += JPEG_TIFF;
+    memcpy(t, "II*\0", 4); put32(t + 4, 8);
+    put16(t + 8, 1); put16(t + 10, XMP_EXIF_IFD_TAG); put16(t + 12, 4); put32(t + 14, 1); put32(t + 18, 26); put32(t + 22, 0);
+    put16(t + 26, 1); put16(t + 28, XMP_MAKERNOTE_TAG); put16(t + 30, 7); put32(t + 32, 30); put32(t + 36, 44); put32(t + 40, 0);
+    memcpy(t + 44, "RICOH\0II", 8);
+    put16(t + 52, 2); put16(t + 54, 0x0001); put16(t + 56, 3); put32(t + 58, 1); put32(t + 62, 0x1234);
+    put16(t + 66, XMP_TONE_TAG); put16(t + 68, 3); put32(t + 70, 1); put32(t + 74, code); put32(t + 78, 0);
+    WORD(JPEG_WRITER, JPEG_WRITER_BUFFER) = JPEG_BUFFER;
+    WORD(JPEG_WRITER, JPEG_WRITER_SIZE) = size;
+    WORD(JPEG_WRITER, JPEG_WRITER_APP7) = JPEG_APP7;
+}
+static void effect_name(uint32_t r, const uint16_t *name, uint32_t units)
+{
+    for (uint32_t i = 0; i < XMP_NAME_UNITS; ++i) HALF(r, GRKIT_RECORD_NAME + i * 2) = i < units ? name[i] : 0;
+}
+/* The packet text of the segment at the APP7 offset, NUL-terminated, or 0
+   without a segment. */
+static const char *jpeg_packet(uint32_t *segment)
+{
+    static char text[0x1000];
+    const uint8_t *p;
+    *segment = WORD(JPEG_WRITER, JPEG_WRITER_APP7) - JPEG_APP7;
+    if (!*segment) return 0;
+    p = (const uint8_t *)region(JPEG_BUFFER + JPEG_APP7, *segment);
+    assert(p[0] == 0xff && p[1] == 0xe1 && (uint32_t)(p[2] << 8 | p[3]) == *segment - 2);
+    assert(!memcmp(p + 4, "http://ns.adobe.com/xap/1.0/", 29));
+    assert(*segment - 33 < sizeof(text));
+    memcpy(text, p + 33, *segment - 33);
+    text[*segment - 33] = 0;
+    assert(strstr(text, "<?xpacket end=\"w\"?>") == text + *segment - 33 - 19);
+    return text;
+}
+/* The keyword of the segment that picture_jpeg_xmp writes for `code`, or 0. */
+static const char *jpeg_keyword(uint32_t code)
+{
+    static char keyword[256];
+    uint32_t segment;
+    const char *text, *start, *end;
+    jpeg_header(code, 0x20000);
+    picture_jpeg_xmp(JPEG_WRITER);
+    if (!(text = jpeg_packet(&segment))) return 0;
+    assert(!(segment % XMP_ALIGN) && segment < 0x300);
+    assert(!strstr(text, "dc:description"));
+    start = strstr(text, "<dc:subject><rdf:Bag><rdf:li>");
+    end = strstr(text, "</rdf:li></rdf:Bag></dc:subject>");
+    assert(start && end && end > start && (size_t)(end - start) < sizeof(keyword) + 29);
+    start += 29;
+    memcpy(keyword, start, (size_t)(end - start));
+    keyword[end - start] = 0;
+    return keyword;
+}
+/* The effect that a maker note records: the record of the build of the shot,
+   or in playback, for a write without a build such as Resize, the record of
+   the code of the photo shown. */
+static void capture_tone_contract(void)
+{
+    reset();
+    HALF(record(2), GRKIT_RECORD_CODE) = 0x9235;
+    /* A capture with an effect, and a native capture. */
+    store_shot(SHOT, record(1));
+    assert(picture_capture_tone_record(SHOT) == record(1));
+    store_shot(SHOT + 0x100, 0);
+    playback_tone = 0x10000 | (0x9235 - 0x100);
+    assert(picture_capture_tone_record(SHOT + 0x100) == 0);
+    /* A write without a build while shooting: native. */
+    ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 0;
+    assert(picture_capture_tone_record(SHOT + 0x200) == 0);
+    /* In playback: the effect of the photo shown, if the camera has it. */
+    ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 1;
+    assert(picture_capture_tone_record(SHOT + 0x200) == record(2));
+    assert(picture_capture_record(SHOT + 0x200) == 0);
+    playback_tone = 0x10000 | (0x9236 - 0x100);
+    assert(picture_capture_tone_record(SHOT + 0x200) == 0);
+    playback_tone = 6;
+    assert(picture_capture_tone_record(SHOT + 0x200) == 0);
+    /* A build in playback, such as a RAW development, keeps its own record. */
+    playback_tone = 0x10000 | (0x9235 - 0x100);
+    store_shot(SHOT + 0x300, 0);
+    assert(picture_capture_tone_record(SHOT + 0x300) == 0);
+    ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 0;
+    playback_tone = 0;
+}
+static void jpeg_xmp_contract(void)
+{
+    static const uint16_t trix[] = {'T', 'r', 'i', '-', 'X', ' ', '<', '4', '0', '0', '>', ' ', '&', ' ', '"', 0xdc, '"', 0};
+    static const uint16_t portra[] = {'P', 'o', 'r', 't', 'r', 'a', ' ', '4', '0', '0', 0};
+    uint32_t segment;
+    reset();
+    HALF(record(1), GRKIT_RECORD_CODE) = 0x9234;
+    HALF(record(2), GRKIT_RECORD_CODE) = 0x9235;
+    effect_name(record(1), trix, 18);
+    effect_name(record(2), portra, 11);
+    /* The name of the effect with the code, as escaped UTF-8. */
+    assert(!strcmp(jpeg_keyword(0x9234), "Tri-X &lt;400&gt; &amp; &quot;\xc3\x9c&quot;"));
+    assert(!strcmp(jpeg_keyword(0x9235), "Portra 400"));
+    /* A native look gets its menu name; a code without a name gets no segment. */
+    assert(!strcmp(jpeg_keyword(0x100), "Standard"));
+    assert(!strcmp(jpeg_keyword(0x105), "Hi-Contrast B&amp;W"));
+    assert(!strcmp(jpeg_keyword(0x10b), "Negative Film"));
+    assert(!strcmp(jpeg_keyword(0x10c), "Cinema Yellow"));
+    assert(!strcmp(jpeg_keyword(0x10d), "Cinema Green"));
+    assert(!jpeg_keyword(0x10e) && !jpeg_keyword(0xff) && !jpeg_keyword(0x9236));
+#ifdef NATIVE_TONE_MONOCHROME
+    /* GR IV: the looks of GR IV Monochrome. */
+    assert(!strcmp(jpeg_keyword(0x8100), "Monochrome Standard"));
+    assert(!strcmp(jpeg_keyword(0x8101), "Monochrome Solid"));
+    assert(!strcmp(jpeg_keyword(0x8105), "Monochrome HDR Tone"));
+    assert(!strcmp(jpeg_keyword(0x8106), "Monochrome Solarized Effect"));
+    assert(!jpeg_keyword(0x8107));
+#else
+    /* GR III records no native code with bit 15: a code without a record has no name. */
+    assert(!jpeg_keyword(0x8100));
+#endif
+    /* No module runs (the GRKit switch is Off): no segment. */
+    header[GRKIT_HOST_CAPABILITIES / 4] = 0;
+    assert(!jpeg_keyword(0x9235) && !jpeg_keyword(0x100));
+    reset();
+    HALF(record(2), GRKIT_RECORD_CODE) = 0x9235;
+    effect_name(record(2), portra, 11);
+    /* The segment leaves room for the largest APP7. */
+    jpeg_header(0x9235, 0x20000);
+    picture_jpeg_xmp(JPEG_WRITER);
+    segment = WORD(JPEG_WRITER, JPEG_WRITER_APP7) - JPEG_APP7;
+    jpeg_header(0x9235, JPEG_APP7 + segment + XMP_APP7_RESERVE - 1);
+    picture_jpeg_xmp(JPEG_WRITER);
+    assert(WORD(JPEG_WRITER, JPEG_WRITER_APP7) == JPEG_APP7);
+    jpeg_header(0x9235, JPEG_APP7 + segment + XMP_APP7_RESERVE);
+    picture_jpeg_xmp(JPEG_WRITER);
+    assert(WORD(JPEG_WRITER, JPEG_WRITER_APP7) == JPEG_APP7 + segment);
+    /* An APP7 offset off 32 bytes is not a firmware header: no segment. */
+    jpeg_header(0x9235, 0x20000);
+    WORD(JPEG_WRITER, JPEG_WRITER_APP7) = JPEG_APP7 + 4;
+    picture_jpeg_xmp(JPEG_WRITER);
+    assert(WORD(JPEG_WRITER, JPEG_WRITER_APP7) == JPEG_APP7 + 4);
+    /* A header without a Ricoh maker note: no segment. */
+    jpeg_header(0x9235, 0x20000);
+    memcpy(region(JPEG_BUFFER + JPEG_TIFF + 44, 8), "PENTAX\0\0", 8);
+    picture_jpeg_xmp(JPEG_WRITER);
+    assert(WORD(JPEG_WRITER, JPEG_WRITER_APP7) == JPEG_APP7);
+    /* UTF-16 to UTF-8: a pair, a lone surrogate, a control, and a name without NUL. */
+    static const uint16_t pair[] = {0xd83c, 0xdf9e, 0xd800, 'A', 0x0a, 0};
+    static const uint16_t full[XMP_NAME_UNITS] = {'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A',
+                                                  'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A'};
+    uint8_t out[64];
+    assert(xmp_put_name(out, pair, 6) == 9 && !memcmp(out, "\xf0\x9f\x8e\x9e\xef\xbf\xbd" "A ", 9));
+    assert(xmp_put_name(0, full, XMP_NAME_UNITS) == XMP_NAME_UNITS);
+    assert(!xmp_segment_size(pair + 5, 1));
+    /* Each native name fits a record name. */
+    uint16_t name[XMP_NATIVE_UNITS];
+    for (uint32_t code = XMP_NATIVE_FIRST; code < XMP_NATIVE_FIRST + 14; ++code) assert(xmp_native_name(code, name, XMP_NATIVE_UNITS));
+    assert(!xmp_native_name(XMP_NATIVE_FIRST + 14, name, XMP_NATIVE_UNITS));
+#ifdef NATIVE_TONE_MONOCHROME
+    for (uint32_t code = NATIVE_TONE_MONOCHROME; code < NATIVE_TONE_MONOCHROME + 7; ++code)
+        assert(xmp_native_name(code, name, XMP_NATIVE_UNITS));
+#endif
+}
+
 int main(void)
 {
+    capture_tone_contract();
+    jpeg_xmp_contract();
 #ifdef GRAIN_FILL_PITCH
     grain_contract();
 #endif
     static const short identity[9] = {8192, 0, 0, 0, 8192, 0, 0, 0, 8192};
+    frame_filter_switches();
+    shot_contract();
+    composition_frames_keep_the_native_photo_area();
+    dng_defaults_follow_the_shot_without_changing_jpeg_geometry();
+    /* picture_white: input 255 of the curves after the post matrix, and 255
+       each without a record. */
+    {
+        static const short swap[9] = {0, 8192, 0, 8192, 0, 0, 0, 0, 8192};
+        PictureSet s;
+        u8 w[3];
+        memset(&s, 0, sizeof s);
+        grkit_export_picture_white(&s, w);
+        assert(w[0] == 255 && w[1] == 255 && w[2] == 255);
+        reset();
+        s.record = record(1);
+        HALF(record(1), GRKIT_RECORD_CURVES + 255 * 2) = 14777;
+        HALF(record(1), GRKIT_RECORD_CURVES + GRKIT_RECORD_CURVE_SIZE + 255 * 2) = 14584;
+        HALF(record(1), GRKIT_RECORD_CURVES + 2 * GRKIT_RECORD_CURVE_SIZE + 255 * 2) = 14391;
+        grkit_export_picture_white(&s, w);
+        assert(w[0] == 230 && w[1] == 227 && w[2] == 224);
+        post(record(1), swap);
+        grkit_export_picture_white(&s, w);
+        assert(w[0] == 227 && w[1] == 230 && w[2] == 224);
+        HALF(record(1), GRKIT_RECORD_CURVES + 255 * 2) = 16383;
+        HALF(record(1), GRKIT_RECORD_CURVES + GRKIT_RECORD_CURVE_SIZE + 255 * 2) = 16383;
+        HALF(record(1), GRKIT_RECORD_CURVES + 2 * GRKIT_RECORD_CURVE_SIZE + 255 * 2) = 16383;
+        grkit_export_picture_white(&s, w);
+        assert(w[0] == 255 && w[1] == 255 && w[2] == 255);
+    }
     /* Native records and GRFX0001 records keep the native matrix bits. */
     reset();
     WORD(CONTEXT, 8) = 0x5501900c;
@@ -498,6 +973,8 @@ int main(void)
     WORD(CONTEXT, 8) = record(3);
     picture_post(OBJECT, CONTEXT, SETTINGS);
     for (int i = 0; i < 9; ++i) assert(coefficient(i) == bt601[i]);
+
+    native_saturation_contract(swap);
 
     /* Selective color: the live view drops the chroma rows, so the viewfinder shows
        the luma that removed hues keep. Still builds keep the whole matrix. */
@@ -592,6 +1069,24 @@ int main(void)
         store_posed(SHOT, 0, 6);
         picture_encode(0, MESSAGE);
         assert(applied_turns == 0);
+    }
+    /* A RAW development turns as the EXIF Orientation of its DNG, not as
+       the posture at the development. */
+    {
+        static const u32 orientation[5] = {1, 6, 3, 8, 2};
+        static const u32 turns[5] = {0, 1, 2, 3, 0};
+        developing = 1;
+        for (u32 k = 0; k < 5; ++k) {
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 1;
+            store_posed(SHOT, 0, 3);
+            photo_orientation = orientation[k];
+            picture_encode(0, MESSAGE);
+            assert(applied_turns == turns[k]);
+        }
+        developing = 0;
+        photo_orientation = 1;
     }
     /* Upright position: on each plane the stamp goes to the bottom right of
        the picture turned upright, which is the top right of the frame for
@@ -768,6 +1263,61 @@ int main(void)
             assert(seven.lit && seven.right <= 720 - 80 && seven.left > 360 && seven.top > 240);
             assert(seven.right < crop.right && seven.right > square.right);
         }
+    }
+    /* A RAW development: the time of the DNG in playback, and the clock
+       without one or without a development. */
+    {
+        GrkitDateTime t;
+        developing = 1;
+        local_time(&t);
+        assert(t.year == 2025 && t.month == 1 && t.day == 1 && t.hour == 12 && t.minute == 2 && t.second == 11);
+        for (photo_unset = 1; photo_unset <= 2; ++photo_unset) {
+            local_time(&t);
+            assert(t.year == 2026 && t.month == 10 && t.day == 17);
+        }
+        photo_unset = 0;
+        developing = 0;
+        local_time(&t);
+        assert(t.year == 2026 && t.month == 10 && t.day == 17);
+    }
+    /* A RAW development: the visible area of the developed picture, not the
+       Framing ratio for shots. The main picture is the largest one. */
+    {
+        struct box b;
+        developing = 1;
+        /* XPan for shots, a 3:2 DNG: the stamp of a 3:2 picture. */
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = 1;
+        ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 1;
+        picture_encode(0, MESSAGE);
+        b = changes(1, 0);
+        assert(b.lit && b.bottom > 480 - 38);
+        /* Off for shots, an XPan DNG (GRKIT_HOST_FRAME_FILE 2): above the XPan bar. */
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = 0;
+        ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 2;
+        picture_encode(0, MESSAGE);
+        b = changes(1, 0);
+        assert(b.lit && b.bottom <= 480 - 107 && b.top > 240);
+        b = changes(2, 0);
+        assert(b.lit && b.bottom <= 120 - 30);
+        /* A 4:3 DNG: left of the 4:3 bar. */
+        encode_setup();
+        picture(0, 800, 600, 800, PLANES);
+        picture(1, 720, 480, 736, PLANES + 0x100000);
+        picture(2, 160, 120, 160, PLANES + 0x1c0000);
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 1;
+        picture_encode(0, MESSAGE);
+        b = changes(1, 0);
+        assert(b.lit && b.right <= 720 - 40 && b.left > 360);
+        developing = 0;
+        ((volatile u8 *)header)[GRKIT_HOST_FRAME_FILE] = 0;
     }
     /* A monochrome GRKit effect keeps neutral chroma: the stamp lights only Y. */
     encode_setup();
@@ -1051,6 +1601,15 @@ int main(void)
         picture_record_parameters(0x1234, SHOT);
         assert(ifd_writes == 9 && ifd_entry == 0x1234);
         for (u32 i = 0; i < 9; ++i) assert(ifd_values[elements[i]] == shown[i]);
+        /* A native look's defaults add to the stored changes: saturation -2
+           with a change of +2 records 0, sharpness -3 with +1 records -2. */
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 0) = 7;
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 6) = 6;
+        picture_record_parameters(0x1234, SHOT);
+        assert(ifd_values[0] == 0 && ifd_values[6] == 0xfffe && ifd_values[3] == 4);
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 0) = 0;
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 6) = 0;
+        picture_record_parameters(0x1234, SHOT);
         /* The other elements keep the native fill. */
         for (u32 i = 0; i < 32; ++i)
             if (i > 10 || i == 7 || i == 8) assert(ifd_values[i] == 0xaaaaaaaaU);
@@ -1058,6 +1617,104 @@ int main(void)
         ifd_writes = 0;
         picture_record_parameters(0x1234, SHOT + 4);
         assert(ifd_writes == 0);
+    }
+#ifdef DEVELOP_PARAMETERS
+    /* Fn in a RAW development: while the Standard set of the development
+       model holds the adjustments of the effect, the stage gate and the
+       maker note read the set. The Fn adjustments of the record do
+       not change, and a native row gets the own values of the set back. */
+    {
+        static const uint8_t kinds[9] = PARAMETER_KINDS;
+        reset();
+        header[GRKIT_HOST_CAPABILITIES / 4] |= GRKIT_CORE_TONE_BIT;
+        memset(develop_set, 3, sizeof(develop_set));
+        /* Saturation +2 and a Clarity default of +1 in the record. */
+        BYTE(record(2), GRKIT_RECORD_PARAMETERS + 0) = 2;
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 8) = 1;
+        developing = 1;
+        header[GRKIT_HOST_DEVELOP / 4] = record(2);
+        develop_hold(header, record(2));
+        assert(header[GRKIT_HOST_DEVELOP_FILLED / 4] == record(2));
+        assert(develop_set[kinds[0]] == 6 && develop_set[kinds[7]] == 4 && develop_set[kinds[8]] == 5);
+        /* The page sets Shading 0 and Clarity neutral. */
+        develop_set[kinds[7]] = 0;
+        develop_set[kinds[8]] = 4;
+        assert(picture_gate_flag(0) == 1);
+        develop_set[kinds[7]] = 4;
+        assert(picture_gate_flag(1) == 0);
+        develop_set[kinds[6]] = 8;
+        /* The maker note of the developed picture records the set. */
+        developing = 1;
+        memset(ifd_values, 0xaa, sizeof(ifd_values));
+        still(record(2));
+        picture_record_parameters(0x1234, SHOT);
+        assert(ifd_values[0] == 2 && ifd_values[6] == 4 && ifd_values[9] == 0 && ifd_values[10] == 0);
+        /* The record keeps its own adjustments. */
+        assert(BYTE(record(2), GRKIT_RECORD_PARAMETERS + 0) == 2 && record_parameter(record(2), 6) == 4);
+        /* A native row: the own values come back, and the builds read the record. */
+        develop_hold(header, 1);
+        assert(header[GRKIT_HOST_DEVELOP_FILLED / 4] == 0);
+        for (u32 i = 0; i < 9; ++i) assert(develop_set[kinds[i]] == 3);
+        assert(develop_parameter(header, record(2), 0, 1) == 6);
+        /* Another effect after one: the own values stay those of the start. */
+        develop_hold(header, record(2));
+        develop_hold(header, record(1));
+        develop_hold(header, 0);
+        for (u32 i = 0; i < 9; ++i) assert(develop_set[kinds[i]] == 3);
+        /* Changed adjustments come back with their effect, also after other
+           effects that the page did not change. */
+        develop_hold(header, record(2));
+        develop_set[kinds[2]] = 7;
+        develop_hold(header, record(1));
+        assert(develop_set[kinds[2]] == 4 && header[GRKIT_HOST_DEVELOP_CHANGED / 4] == record(2));
+        develop_hold(header, 1);
+        develop_hold(header, record(1));
+        develop_hold(header, record(2));
+        assert(develop_set[kinds[2]] == 7 && develop_set[kinds[0]] == 6);
+        develop_hold(header, 0);
+        /* A new development starts without an effect in the set. */
+        develop_hold(header, record(2));
+        picture_develop_start();
+        assert(header[GRKIT_HOST_DEVELOP_FILLED / 4] == 0 && header[GRKIT_HOST_DEVELOP_CHANGED / 4] == 0);
+        developing = 0;
+        BYTE(record(2), GRKIT_RECORD_PARAMETERS + 0) = 0;
+        BYTE(record(2), GRKIT_RECORD_FN_DEFAULTS + 8) = 0;
+    }
+#endif
+    /* The stage gate of the grain stage reads the shot settings before the
+       parameter build of the shot. A GRKit effect gets the rule of Standard
+       with the Shading (7) and Clarity (8) of its record. Native processing
+       keeps the native result. */
+    {
+        reset();
+        header[GRKIT_HOST_ACTIVE / 4] = record(1);
+        /* Without a module that uses CORE.TONE, the native result stays. */
+        assert(picture_gate_flag(0) == 0 && picture_gate_flag(1) == 1);
+        header[GRKIT_HOST_CAPABILITIES / 4] |= GRKIT_CORE_TONE_BIT;
+        /* Neutral Shading and Clarity: off, whatever the native type gives. */
+        assert(picture_gate_flag(1) == 0);
+        BYTE(record(1), GRKIT_RECORD_PARAMETERS + 7) = 4;
+        assert(picture_gate_flag(0) == 1);
+        BYTE(record(1), GRKIT_RECORD_PARAMETERS + 7) = 0;
+        BYTE(record(1), GRKIT_RECORD_PARAMETERS + 8) = 8;
+        assert(picture_gate_flag(0) == 1);
+        /* A Fn default of +1 and a change of -1 give the neutral value. */
+        BYTE(record(1), GRKIT_RECORD_FN_DEFAULTS + 8) = 1;
+        assert(picture_gate_flag(1) == 0);
+        BYTE(record(1), GRKIT_RECORD_FN_DEFAULTS + 8) = 0;
+        BYTE(record(1), GRKIT_RECORD_PARAMETERS + 8) = 0;
+        /* Film Look Off: the native result. */
+        header[GRKIT_HOST_ACTIVE / 4] = 0;
+        assert(picture_gate_flag(1) == 1 && picture_gate_flag(0) == 0);
+        /* A RAW development takes its own effect, and 1 is native processing. */
+        header[GRKIT_HOST_ACTIVE / 4] = record(1);
+        BYTE(record(2), GRKIT_RECORD_PARAMETERS + 7) = 4;
+        developing = 1;
+        header[GRKIT_HOST_DEVELOP / 4] = record(2);
+        assert(picture_gate_flag(0) == 1);
+        header[GRKIT_HOST_DEVELOP / 4] = 1;
+        assert(picture_gate_flag(1) == 1 && picture_gate_flag(0) == 0);
+        developing = 0;
     }
     /* Division helper used for reciprocals. */
     for (u32 n = 0; n < 70000; n += 37) for (u32 d = 1; d < 400; d += 13) assert(divide(n, d) == n / d);

@@ -5,26 +5,32 @@ English | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) 
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit adds film looks, XPan and other crops, date stamps, and grain to RICOH GR III, GR IIIx, and GR IV. It runs from the SD card and never writes to the firmware. Take the card out and the camera is back to stock.
+GRKit adds film looks, XPan and other crops, date stamps, glow, and grain to RICOH GR III, GR IIIx, and GR IV. It runs from the SD card and never writes to the firmware. Take the card out and the camera is back to stock.
 
 <p>
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.jpg" alt="The GRKit page in the ADJ menu" width="49%">
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.jpg" alt="The GRKit section in the Customize tab of MENU" width="49%">
 </p>
 
-Photo: [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/) by nagi usano, [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).
+Photo: [MIKI Yoshihito](https://www.flickr.com/photos/mujitra/53311001084/), [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).
 
 ## Features
 
 Press the ADJ lever while shooting and pick the sixth item, GRK.
 
 - **Film Look**: Portra 400, Velvia 100, Tri-X 400, and more, with a live preview. You can also import your own `.cube` LUT or Lightroom preset on [grkit.app](https://grkit.app). Each look is fitted from an open-source film LUT, so it comes close to the original but isn't identical ([sources](effects/NOTICE.md)).
-- **Framing**: XPan, 2.35:1, 16:9, 4:3, 5:4, 7:6, and 1:1, with a mask or frame lines in the viewfinder.
+- **Framing**: XPan, 2.35:1, 16:9, 4:3, 5:4, 7:6, and 1:1. Crop JPEG photos or mark composition only, with a mask or frame lines. Selecting a ratio sets the camera to 3:2 in either mode. Off keeps the camera's current aspect ratio.
+
+  RAW files keep the native 3:2 default crop and the camera's digital crop setting. Embedded previews can still show the selected composition.
+
 - **Guides**: thirds, center, golden ratio, or diagonals.
 - **Date Imprint**: the date on the photo in classic, GR1s dot-matrix, or GR II style.
+- **Glow**: Bloom softly spreads light around lights and highlights. Halation adds a red-orange halo around bright lights to simulate motion-picture film. Each effect has its own Enable and Strength settings, so both can run together.
 - **Grain**: film grain in four strengths and four sizes (Auto, Small, Medium, Large).
 
 GRKit takes about 8 to 10 seconds to load after power-on, and longer on GR IV or on the first start after an install or update. Until then, the camera uses its own settings. All the settings are in the GRKit section at the end of the Customize tab in MENU. To write your own module, see [Writing a module](docs/modules.md).
+
+**Fast start:** with the optional [fast-boot firmware](resources/FASTBOOT.md), the same GRKit package loads soon after power-on. You make it on the [Fast start page](https://grkit.app/fastboot/) of grkit.app from the official Ricoh firmware and install it as a firmware update. GRKit itself never writes to the firmware.
 
 ## Supported cameras
 
@@ -78,6 +84,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Device reports are welcome whether GRKit
 
 - [Architecture](docs/architecture.md)
 - [Writing a module](docs/modules.md) and the [module reference](docs/module-reference.md)
+- [Fast-boot firmware](docs/fastboot.md): the script interface for SD scripts
 - [Release process](docs/releasing.md)
 - [Effects](effects/README.md)
 - [Web site](web/README.md)

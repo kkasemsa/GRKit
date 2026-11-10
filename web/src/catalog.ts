@@ -39,12 +39,19 @@ export interface CatalogEffect extends EffectFields {
   card?: undefined;
 }
 
-/** An effect that this page fitted from a LUT. It has no site files. */
-export interface ImportedEffect extends EffectFields {
-  cover: Cover;
+/**
+ * An effect that this page made in the browser: a fit of a LUT, or a native look of a firmware
+ * file that the user chose. It has no site files.
+ */
+export interface ImportedEffect<I extends Imported = Imported> extends EffectFields {
+  /**
+   * Can be missing for an effect restored from a package without its details: the effect file
+   * keeps only the icon pixels.
+   */
+  cover: I extends RestoredImport ? Cover | undefined : Cover;
   /** The key of the preview table in the preview cache (`provideTable`). */
   preview: string;
-  imported: Imported;
+  imported: I;
   card?: undefined;
 }
 
@@ -71,12 +78,17 @@ export const GRADES = ['A', 'B', 'C', 'D'] as const;
 /** How closely an imported effect follows its LUT, from A (nearly the same) to D. */
 export type Grade = (typeof GRADES)[number];
 
-/** What `importLut` returns for one LUT, besides the effect fields. */
-export interface Imported {
+/** The data of an imported effect that the package and the preview use. */
+interface ImportData {
   /** The compiled `.GRF` effect, which the package takes as it is. */
   blob: Uint8Array;
   /** The RAW preview table, in the format of the catalog tables. */
   table: Uint8Array;
+}
+
+/** What `importLut` returns for one LUT, besides the effect fields. */
+export interface LutImport extends ImportData {
+  kind: 'lut';
   grade: Grade;
   /** The input encoding that the fit used: the user's choice or the guess. */
   input: Input;
@@ -85,6 +97,36 @@ export interface Imported {
   /** The LUT file name. */
   source: string;
 }
+
+/**
+ * A look that GR IV has built in, which `nativeLooks` reads from the firmware file of the user.
+ * Its data follows the Standard of GR III, so only GR III and GR IIIx packages take it.
+ */
+export interface NativeImport extends ImportData {
+  kind: 'native';
+  /** The GR IV version of the firmware file, such as `1.20`. */
+  version: string;
+  /** The firmware file name. */
+  source: string;
+  /**
+   * The tone curves of the preview (`NativeLookEffect.tone`), which redraw it without the
+   * firmware file. A look unlocked before the page kept them has none.
+   */
+  tone?: Uint16Array;
+}
+
+/**
+ * A LUT import that the page read back from a GRKit.zip, for a browser that lost its imports. The
+ * file keeps the effect, its name, and its icon, but not the fit details of the import.
+ */
+export interface RestoredImport extends ImportData {
+  kind: 'restored';
+  /** The ZIP file name. */
+  source: string;
+}
+
+/** `kind` tells the sources apart. */
+export type Imported = LutImport | NativeImport | RestoredImport;
 
 export interface Catalog {
   target: string;
@@ -112,7 +154,10 @@ export function readBaseGamma(value: unknown): Uint16Array | undefined {
 
 
 export function siteUrl(path: string): string {
-  return new URL(path, document.baseURI).href;
+  // Site files sit under the root, also for a language page such as /ja/. The build renders the
+  // page without a document and gives the root-relative address there.
+  const root = `${import.meta.env.BASE_URL}${path}`;
+  return typeof document === 'undefined' ? root : new URL(root, document.baseURI).href;
 }
 
 export function effectUrl(target: string, path: string): string {

@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use crate::{capabilities, effects, hue, menu_text, selective};
+use crate::{capabilities, effects, hue, menu_text, native_look, selective};
 
 /// A byte range of the private header, of a record, or of a GRF file.
 pub struct Field {
@@ -28,6 +28,29 @@ macro_rules! fields {
     };
 }
 
+/// Declares fields that follow each other from offset 0 in the order given:
+/// a `usize` constant for each, a table of the fields, and their total size.
+/// A field is one line, so a new field moves the ones after it, and none has
+/// a fixed offset.
+macro_rules! packed_fields {
+    ($table:ident, $total:ident { $($(#[doc = $doc:literal])* $name:ident: $size:expr;)* }) => {
+        packed_fields!(@offsets 0; $($(#[doc = $doc])* $name: $size;)*);
+        /// The size of the fields together.
+        pub const $total: usize = 0 $(+ $size)*;
+        pub const $table: &[Field] = &[$(Field {
+            name: stringify!($name),
+            offset: $name,
+            size: $size,
+            doc: concat!($($doc, "\n"),*),
+        }),*];
+    };
+    (@offsets $at:expr;) => {};
+    (@offsets $at:expr; $(#[doc = $doc:literal])* $name:ident: $size:expr; $($rest:tt)*) => {
+        $(#[doc = $doc])* pub const $name: usize = $at;
+        packed_fields!(@offsets $name + $size; $($rest)*);
+    };
+}
+
 // The capacity of the runtime. `runtime` exports these too.
 /// The icon slots of one icon chunk, which one script array holds.
 pub const ICONS_PER_CHUNK: usize = 40;
@@ -44,22 +67,21 @@ pub const MODULE_SETTINGS_MAX: usize = 160;
 /// The most artwork tiles of all modules. The installer puts them in the
 /// icon chunks after the effect icons.
 pub const MODULE_TILES_MAX: usize = 128;
-/// Off, GRKit, Version, and Modules.
-/// The menu addresses the Version and Modules icons by their offset from the
-/// GRKit icon, so the host icons come first in chunk 0, and they must fit in
-/// it. The effect icons follow them.
-pub const HOST_ICON_COUNT: usize = 4;
+/// Off, GRKit, Version, Modules, Modules with a line through it (Enable
+/// GRKit Off), and the Fn hint of a row where Fn turns a setting. The menu
+/// addresses the icons after Off by their offset from the GRKit icon, so the
+/// host icons come first in chunk 0, and they must fit in it. The effect
+/// icons follow them.
+pub const HOST_ICON_COUNT: usize = 6;
 const _: () = assert!(HOST_ICON_COUNT <= ICONS_PER_CHUNK);
 /// Product limit for private Image Control effects. Each effect takes a
 /// record of the registry array and an icon slot, about 10.5 KB of script
 /// memory. The registry holds only the header and the records, and they fit
 /// one array of 65536 words. The tail is an array of its own.
-pub const MAX_COUNT: usize = 20;
+pub const MAX_COUNT: usize = 40;
 /// The chunk addresses that the header holds (`GRKIT_HOST_ICON_CHUNKS`).
 pub const ICON_CHUNK_SLOTS: usize = 5;
 
-/// The fields of the header.
-pub const HOST_HEADER_SIZE: usize = 768;
 /// The placeholder for the header address in ARM code. The installer replaces
 /// each literal word with this value by the address of the `registry` array.
 pub const HEADER_REFERENCE: u32 = 0x58012340;
@@ -72,183 +94,260 @@ pub const MODULE_PAGES_MAX: usize = MODULES_MAX;
 /// that the header holds.
 pub const MODULE_LAYERS_MAX: usize = 16;
 pub const MODULE_FILTERS_MAX: usize = 8;
+/// The most registered viewfinder indicators and visible status-row cells.
+pub const INDICATORS_MAX: usize = 16;
+pub const STATUS_ICONS_MAX: usize = 6;
 
-fields!(HEADER_FIELDS {
+// The fields of the header. The loader, the installer, and the ARM code of one
+// build take the offsets from this table, so a field can go anywhere in it.
+packed_fields!(HEADER_FIELDS, HOST_HEADER_SIZE {
     /// Number of Image Control records.
-    HOST_COUNT = 0, 4;
+    HOST_COUNT: 4;
     /// Address of record 0. The records follow the header without gaps.
-    HOST_RECORDS = 4, 4;
+    HOST_RECORDS: 4;
     /// Selected record, or 0 for native processing.
-    HOST_ACTIVE = 8, 4;
+    HOST_ACTIVE: 4;
     /// The ScreenDevice of the last highlight warning setting
     /// (ScreenDevice::OnSetLevelAlarm), or 0 (runtime/framing.c).
-    HOST_LEVEL_SCREEN = 12, 4;
+    HOST_LEVEL_SCREEN: 4;
     /// GRKIT_HOST_MAGIC_VALUE after the installer writes the header.
-    HOST_MAGIC = 16, 4;
+    HOST_MAGIC: 4;
     /// GRKIT_HOST_VERSION_VALUE.
-    HOST_VERSION = 20, 4;
+    HOST_VERSION: 4;
     /// The mode of that setting: 0 while the warning is off. A change of the
     /// effect sets the warning again with this mode.
-    HOST_LEVEL_MODE = 24, 4;
+    HOST_LEVEL_MODE: 4;
     /// Number of parameter builds. A diagnostic.
-    HOST_PROCESSING_CALLS = 28, 4;
+    HOST_PROCESSING_CALLS: 4;
     /// ADJ controller that shows the private menu, or 0.
-    HOST_MENU_CONTROLLER = 32, 4;
+    HOST_MENU_CONTROLLER: 4;
     /// Private menu level: 0 native, MENU_ROOT, or MENU_MODULE (runtime/modules.h).
-    HOST_MENU_LEVEL = 36, 4;
+    HOST_MENU_LEVEL: 4;
     /// Highlighted row of the private menu.
-    HOST_MENU_CURSOR = 40, 4;
+    HOST_MENU_CURSOR: 4;
     /// Address of the tail, an array of its own: the picture scratch, the
     /// menu text, then the live-view labels. INSTALL writes it.
-    HOST_TAIL = 44, 4;
+    HOST_TAIL: 4;
     /// Grain level, the capability CORE.GRAIN: 0 Off, 1 weak, 2 medium, 3
     /// strong. The native grain stage of recorded pictures uses it instead of
     /// the native grain settings.
-    HOST_GRAIN = 48, 4;
+    HOST_GRAIN: 4;
     /// Address of the module list of the Modules page (runtime/manage.h), or
     /// 0 without a listed module. INSTALL writes it.
-    HOST_MANAGE = 52, 4;
+    HOST_MANAGE: 4;
     /// Address of the state of the core services (runtime/services.h): the
     /// event subscribers, the timers, and the UI. INSTALL writes it, with
     /// the module array.
-    HOST_SERVICES = 56, 4;
+    HOST_SERVICES: 4;
     /// Nonzero while the menu rebuilds the native list. The list callback and the
     /// native Image Control preview ignore the changes.
-    HOST_MENU_REBUILDING = 60, 4;
+    HOST_MENU_REBUILDING: 4;
     /// Native list position, saved when the private menu opens.
-    HOST_MENU_LIST = 64, 8;
+    HOST_MENU_LIST: 8;
     /// The module + 1 whose native settings page the menu opened (Module.settings,
     /// runtime/core.h), or 0. While it is set, the
     /// hooks of the borrowed native page show the settings of that module. A
     /// change to a controller outside the page clears it.
-    HOST_SETTINGS = 72, 4;
+    HOST_SETTINGS: 4;
     /// Number of ADJ events. GRKIT_HOST_MENU_EVENT_RING holds the last ones.
-    HOST_MENU_EVENTS = 76, 4;
+    HOST_MENU_EVENTS: 4;
     /// GRKIT_HOST_STATE_CHANGES when the live view last took a redraw for
     /// it. A changed setting redraws the live view once (runtime/framing.c).
-    HOST_FRAME_CHANGES = 80, 4;
+    HOST_FRAME_CHANGES: 4;
     /// Icon of Off, or 0 for the native icon.
-    HOST_OFF_ICON = 84, 4;
+    HOST_OFF_ICON: 4;
     /// How the private menu opened: 1 or 2 across an edge of the native slots,
     /// 3 by touch or on the return from the native parameters.
-    HOST_MENU_EDGE = 88, 4;
+    HOST_MENU_EDGE: 4;
     /// MENU was pressed, and its confirm event has not arrived yet.
-    HOST_BACK_PENDING = 92, 4;
+    HOST_BACK_PENDING: 4;
     /// Text descriptor of the ADJ title: (length + 1) | 0x100, then the address.
-    HOST_MENU_TITLE = 96, 8;
+    HOST_MENU_TITLE: 8;
     /// Text descriptor of the ADJ detail line.
-    HOST_MENU_DETAIL = 104, 8;
+    HOST_MENU_DETAIL: 8;
     /// The last ADJ events: kind | argument << 16.
-    HOST_MENU_EVENT_RING = 112, 32;
+    HOST_MENU_EVENT_RING: 32;
     /// The record whose adjustments the native parameter page edits, or 0. Fn
     /// in GRKit Image Control stores the record with bit 0 set, and the page
     /// start clears bit 0. A page that native ADJ opens clears the word.
-    HOST_PARAMETERS = 144, 4;
+    HOST_PARAMETERS: 4;
     /// Number of adjustment changes. The live view rebuilds its stages when it
     /// changes.
-    HOST_PARAMETER_CHANGES = 148, 4;
+    HOST_PARAMETER_CHANGES: 4;
     /// GRKIT_HOST_PARAMETER_CHANGES at the last live-view build.
-    HOST_LIVE_PARAMETER_CHANGES = 152, 4;
+    HOST_LIVE_PARAMETER_CHANGES: 4;
     /// Icon chunk addresses: chunk n holds icon slots 40 n to 40 n + 39. The
     /// host icons come first in chunk 0, then the effect icons.
-    HOST_ICON_CHUNKS = 156, 4 * ICON_CHUNK_SLOTS;
+    HOST_ICON_CHUNKS: 4 * ICON_CHUNK_SLOTS;
     /// Icon of the GRKit tile.
-    HOST_GRKIT_ICON = 176, 4;
+    HOST_GRKIT_ICON: 4;
     /// Private toolbar cell, or 0.
-    HOST_TOOLBAR_WIDGET = 180, 4;
+    HOST_TOOLBAR_WIDGET: 4;
     /// ADJ controller of the private toolbar cell.
-    HOST_TOOLBAR_OWNER = 184, 4;
+    HOST_TOOLBAR_OWNER: 4;
     /// Module that the private menu shows at MENU_MODULE. At the end of a
     /// private session it holds the module of the root row where the next
     /// session opens (menu_reopen).
-    HOST_MODULE = 188, 4;
+    HOST_MODULE: 4;
     /// Load cue: 0 none, 1 after INSTALL, then 2 + the local second of the
     /// day when the still live view first shows the cue.
-    HOST_LOAD_CUE = 192, 4;
+    HOST_LOAD_CUE: 4;
     /// Aspect id 2 variant for the photo shown in playback: 0 none (shooting uses
     /// the Framing ratio), 1 not 65:24, 2 65:24.
-    HOST_FRAME_FILE = 196, 4;
+    HOST_FRAME_FILE: 4;
     /// Record of the last live-view build: an owned record, or 0 for native processing.
-    HOST_LIVE_RECORD = 200, 4;
+    HOST_LIVE_RECORD: 4;
     /// The capabilities in use: bit n is set when a loaded module uses
     /// capability n (GRKIT_CORE_SETTING_BASE + n). INSTALL writes it, and the
     /// resident loader restores only the values of these capabilities.
-    HOST_CAPABILITIES = 204, 4;
+    HOST_CAPABILITIES: 4;
     /// Framing ratio: 0 native, then the Framing rows.
-    HOST_FRAME_RATIO = 208, 4;
+    HOST_FRAME_RATIO: 4;
     /// ADJ Framing page preview: 0 none, else the highlighted ratio + 1.
-    HOST_FRAME_PREVIEW = 212, 4;
+    HOST_FRAME_PREVIEW: 4;
     /// Number of Framing paints. A diagnostic.
-    HOST_FRAME_DRAWS = 216, 4;
+    HOST_FRAME_DRAWS: 4;
     /// ADJ controller of the preview. Its canvas shows the preview. ADJ can
     /// make its canvas after its first refresh, so a draw reads the canvas
     /// from the controller. The word stays set until a full draw erases the
     /// mask.
-    HOST_FRAME_PREVIEW_ADJ = 220, 4;
+    HOST_FRAME_PREVIEW_ADJ: 4;
     /// Address of the effect list of the Effects page (runtime/effects.h), or
     /// 0 without a listed effect. INSTALL writes it.
-    HOST_EFFECTS = 224, 4;
+    HOST_EFFECTS: 4;
     /// Live view controller that Framing draws on, or 0.
-    HOST_FRAME_OWNER = 228, 4;
+    HOST_FRAME_OWNER: 4;
     /// Canvas of that controller.
-    HOST_FRAME_CANVAS = 232, 4;
+    HOST_FRAME_CANVAS: 4;
     /// Bitmap of the last Framing paint, or 0 when nothing is drawn.
-    HOST_FRAME_BITMAP = 236, 4;
+    HOST_FRAME_BITMAP: 4;
     /// Grain size, the capability CORE.GRAIN_SIZE: 0 Auto (the ISO of the
     /// shot), 1 small, 2 medium, 3 large.
-    HOST_GRAIN_SIZE = 240, 4;
+    HOST_GRAIN_SIZE: 4;
     /// Live-view-only override: 0 none, 1 native processing, else an owned record.
-    HOST_PREVIEW = 244, 4;
+    HOST_PREVIEW: 4;
     /// The grain of the shot whose grain stage was set up last: 0 the native
     /// noise, else the size 1 small, 2 medium, 3 large. The GR III noise fill
     /// reads it (runtime/picture.c).
-    HOST_GRAIN_SHOT = 248, 4;
+    HOST_GRAIN_SHOT: 4;
     /// Return to GRKit Image Control after the native parameter page: 1 opening,
     /// 2 away. 3: ADJ exited from GRKit, so the next ADJ opens GRKit. 4: MENU
     /// or OK on GRKit passed the event that closes ADJ to the native list.
-    HOST_RETURN = 252, 4;
+    /// 5: INSTALL restored CORE.ADJ = 1, so the next ADJ that opens after
+    /// INSTALL opens GRKit (runtime/menu.c).
+    HOST_RETURN: 4;
+    /// CORE.ADJ: 1 when the next ADJ should open on GRKit, 0 for a native
+    /// entry. Survives enter clearing HOST_RETURN, and STATE.TXT keeps it
+    /// across power-off (runtime/menu.c).
+    HOST_ADJ_OPEN: 4;
     /// Number of changes of the saved selections: the effect, CORE.ASPECT,
-    /// CORE.GRAIN, CORE.GRAIN_SIZE, the Fn adjustments, and the module settings
-    /// (GRKIT_STATE_CHANGED). The resident loader polls only this word and
-    /// saves the state file after it changes.
-    HOST_STATE_CHANGES = 256, 4;
+    /// CORE.GRAIN, CORE.GRAIN_SIZE, CORE.ADJ, CORE.ADJ_MODULE, the Fn
+    /// adjustments, and the module settings (GRKIT_STATE_CHANGED). The
+    /// resident loader polls only this word and saves the state file after
+    /// it changes.
+    HOST_STATE_CHANGES: 4;
     /// Number of module plane filters in GRKIT_HOST_MODULE_FILTERS. INSTALL
     /// writes it.
-    HOST_MODULE_FILTER_COUNT = 260, 4;
+    HOST_MODULE_FILTER_COUNT: 4;
     /// Address of the profile table (GRKIT_PROFILE in the tail) while the
     /// development profile runs, else 0. INSTALL writes it when the card has
     /// GRKIT/PROFILE or PROFILE.TXT.
-    HOST_PROFILE = 264, 4;
+    HOST_PROFILE: 4;
     /// Two words for each module plane filter, in stage order: its apply
     /// function, and its setting handle in the low half with its stage in the
     /// high half.
-    HOST_MODULE_FILTERS = 268, 8 * MODULE_FILTERS_MAX;
-    /// Reserved for later fields.
-    HOST_RESERVED = 268 + 8 * MODULE_FILTERS_MAX, HOST_MODULE_SETTINGS - 268 - 8 * MODULE_FILTERS_MAX;
+    HOST_MODULE_FILTERS: 8 * MODULE_FILTERS_MAX;
+    /// The crop of the capture size hooks (runtime/framing.S): the Framing
+    /// ratio where it applies in the native aspect (aspect_value), else 0.
+    /// Each live-view update sets it, so a native aspect that the camera menu
+    /// sets takes the stock sizes.
+    HOST_FRAME_CROP: 4;
+    /// The listed modules that ADJ can show, a bit each, which ADJ Order
+    /// lists (runtime/manage.h). The menu sets it. The text hooks read this
+    /// word, so they do not walk the module pages.
+    HOST_ADJ_MODULES: 4;
     /// Address of the module settings table, or 0 (runtime/settings.h).
     /// INSTALL writes it.
-    HOST_MODULE_SETTINGS = HOST_MODULE_PREVIEW - 4, 4;
+    HOST_MODULE_SETTINGS: 4;
     /// The ADJ preview of a module page: its setting handle plus 1 (0 for
     /// none), then the highlighted value. Module layers of that setting paint
     /// the highlighted value on the ADJ canvas.
-    HOST_MODULE_PREVIEW = HOST_MODULE_PAGE_COUNT - 8, 8;
+    HOST_MODULE_PREVIEW: 8;
     /// Number of module pages in GRKIT_HOST_MODULE_PAGES. INSTALL writes it.
-    HOST_MODULE_PAGE_COUNT = HOST_MODULE_PAGES - 4, 4;
+    HOST_MODULE_PAGE_COUNT: 4;
     /// Three words for each module page (runtime/sdk/grkit.h), in load order:
     /// the address of its GrkitPage, its setting handle, and the global index
     /// of its tile 0 (GRKIT_ICON_MODULE_TILE).
-    HOST_MODULE_PAGES = HOST_MODULE_CHOICE - 12 * MODULE_PAGES_MAX, 12 * MODULE_PAGES_MAX;
+    HOST_MODULE_PAGES: 12 * MODULE_PAGES_MAX;
     /// The module page that the generic page callbacks of the menu serve.
-    HOST_MODULE_CHOICE = HOST_MODULE_LAYER_COUNT - 4, 4;
+    HOST_MODULE_CHOICE: 4;
     /// Number of module layers in GRKIT_HOST_MODULE_LAYERS. INSTALL writes it.
-    HOST_MODULE_LAYER_COUNT = HOST_MODULE_LAYERS - 4, 4;
-    /// Three words for each module layer, in painting order: its paint
-    /// function, its setting handle (GRKIT_NO_SETTING paints with the value
-    /// 1), and its flags in the low half with its order in the high half.
-    HOST_MODULE_LAYERS = HOST_GAMMA_KEY - 12 * MODULE_LAYERS_MAX, 12 * MODULE_LAYERS_MAX;
+    HOST_MODULE_LAYER_COUNT: 4;
+    /// Four words for each module layer, in painting order: its paint
+    /// function, setting handle (GRKIT_NO_SETTING paints with value 1),
+    /// flags in the low half with order in the high half, and an optional
+    /// GrkitLayer descriptor with enabled conditions (0 for no conditions).
+    HOST_MODULE_LAYERS: 16 * MODULE_LAYERS_MAX;
     /// Key of the inputs of the last private curve composition in the gamma
     /// stage, or 0 (runtime/processing.h).
-    HOST_GAMMA_KEY = HOST_HEADER_SIZE - 4, 4;
+    HOST_GAMMA_KEY: 4;
+    /// The effect of the RAW development in playback: 1 for native processing,
+    /// else an owned record. The start of a development sets the effect that
+    /// its DNG records (runtime/picture.c), and its Image Control list changes
+    /// it. The still builds of a development apply it instead of the selected
+    /// effect (runtime/processing.h).
+    HOST_DEVELOP: 4;
+    /// GRKIT_HOST_DEVELOP when the Image Control list of the development
+    /// opened. Cancel restores it, as the list restores its native value.
+    HOST_DEVELOP_SAVED: 4;
+    /// The native rows of that list. The effects follow them (runtime/menu.c).
+    HOST_DEVELOP_ROWS: 4;
+    /// The text ID of the native Standard label of the development, which
+    /// shows the name of a GRKit effect (GRKIT_HOST_DEVELOP_NAME) instead.
+    HOST_DEVELOP_TEXT: 4;
+    /// The text descriptor of that name.
+    HOST_DEVELOP_NAME: 8;
+    /// Number of registered viewfinder indicators. INSTALL writes it.
+    HOST_INDICATOR_COUNT: 4;
+    /// Descriptor address and module tile base for each indicator, in module
+    /// load order and declaration order (runtime/sdk/grkit.h).
+    HOST_INDICATORS: 8 * INDICATORS_MAX;
+    /// Code address of an ABI 2.0/2.1 module that supplies CORE.TONE, or 0.
+    /// Its legacy native icon applies only without an explicit slot owner.
+    HOST_LEGACY_TONE_OWNER: 4;
+    /// CORE.ASPECT_MODE: 0 crops photos, 1 draws a composition frame only.
+    HOST_ASPECT_MODE: 4;
+    /// Native aspect + 1 at the last live-view bind, or 0 before the first bind.
+    HOST_FRAME_NATIVE: 4;
+    /// The Framing ratio of the RAW development in playback (a CORE.ASPECT
+    /// value), or 0 for its native aspect. The start of a development clears
+    /// it (runtime/picture.c), and the aspect list of the development sets it
+    /// (runtime/menu.c). The development sends the capture aspect and the
+    /// geometry of that ratio to the pipeline (runtime/framing.c).
+    HOST_DEVELOP_RATIO: 4;
+    /// GRKIT_HOST_DEVELOP_RATIO when the aspect list of the development
+    /// opened. Cancel restores it, as the list restores its native value.
+    HOST_DEVELOP_RATIO_SAVED: 4;
+    /// The native rows of that list. The Framing ratios follow them.
+    HOST_DEVELOP_ASPECT_ROWS: 4;
+    /// The text ID of the native aspect label that shows the name of the
+    /// Framing ratio (GRKIT_HOST_DEVELOP_RATIO_NAME) instead.
+    HOST_DEVELOP_RATIO_TEXT: 4;
+    /// The text descriptor of that name.
+    HOST_DEVELOP_RATIO_NAME: 8;
+    /// The effect record whose Fn adjustments the Standard parameter set of
+    /// the development model holds, or 0 while the set holds its own values
+    /// (runtime/develop.h).
+    HOST_DEVELOP_FILLED: 4;
+    /// The own values of that set while GRKIT_HOST_DEVELOP_FILLED is not 0:
+    /// one byte for each Fn adjustment, in GRKIT_RECORD_PARAMETERS order.
+    HOST_DEVELOP_NATIVE: 12;
+    /// The effect record whose changed adjustments the development keeps
+    /// while the set holds another one, or 0. The start of a development
+    /// clears it.
+    HOST_DEVELOP_CHANGED: 4;
+    /// Those adjustments, as GRKIT_HOST_DEVELOP_NATIVE.
+    HOST_DEVELOP_CHANGES: 12;
 });
 
 pub const RECORD_SIZE: usize = 0x1100;
@@ -281,6 +380,18 @@ fields!(RECORD_FIELDS {
     /// byte is (native value - 4) mod 9, so zero is neutral. A native value is
     /// 0..8, and 4 is neutral.
     RECORD_PARAMETERS = 0x72c, 9;
+    /// The default of each Fn adjustment, in the order of RECORD_PARAMETERS:
+    /// (default - 4) mod 9 of a native value 0..8, from the Fn defaults of the
+    /// effect (feature 64), else zero. An adjustment's native value is (stored +
+    /// default + 4) mod 9, so a stored zero is the default.
+    RECORD_FN_DEFAULTS = 0x735, 9;
+    /// The Toning of a native look whose red or blue curve differs from green,
+    /// as a stored Fn byte: (shown value) mod 9, -4..4, 0 the look's own
+    /// toning. The curves of the record hold the toned curves.
+    RECORD_TONING = 0x73e, 1;
+    /// 1 + the slot of the look's own red and blue curves in the tail
+    /// (`TONE_CURVES`), or 0 for an effect without Toning.
+    RECORD_TONE_SLOT = 0x73f, 1;
     /// The MultiAxial parameter set that INSTALL expands from the hue sectors of the GRF
     /// (feature 8): the address of the set at +0, the address of the highlight-correction
     /// set at +4, the set (six pointers) at +8, the bounds at +0x20, the bank selectors at
@@ -403,18 +514,51 @@ pub const PICTURE_MASKS: usize = 141376;
 pub const SHOT_ENTRIES: usize = 8;
 /// The shot ring: a write count, the turns of the last shot with a known
 /// posture (`SHOT_LAST_TURNS`), then entry n at `SHOT_ENTRY + SHOT_STRIDE * n`,
-/// which holds the key at `SHOT_KEY`, the record at `SHOT_RECORD`, and the
-/// posture of the electronic level at `SHOT_POSTURE`.
+/// which holds the key at `SHOT_KEY`, the record at `SHOT_RECORD`, the
+/// posture of the electronic level at `SHOT_POSTURE`, and the effective
+/// capture crop at `SHOT_FRAME_CROP`.
 pub const SHOT_LAST_TURNS: usize = 4;
 pub const SHOT_ENTRY: usize = 8;
 pub const SHOT_STRIDE: usize = 16;
 pub const SHOT_KEY: usize = 0;
 pub const SHOT_RECORD: usize = 4;
 pub const SHOT_POSTURE: usize = 8;
+pub const SHOT_FRAME_CROP: usize = 12;
+/// The layout of `GrkitShot` (runtime/sdk/grkit.h) that picture_shot fills:
+/// its size in bytes, then the byte offset of each field, then the bits of
+/// `known`. runtime/picture.c writes these offsets, and
+/// tests/runtime/layout_contract.c checks them against the SDK struct.
+pub const SHOT_INFO: [(&str, usize); 25] = [
+    ("BYTES", 52),
+    ("SIZE", 0),
+    ("KNOWN", 4),
+    ("AV", 8),
+    ("TV", 12),
+    ("SV", 16),
+    ("SCENE_EV", 20),
+    ("COMPENSATION", 24),
+    ("EXPOSURE_US", 28),
+    ("F_NUMBER", 32),
+    ("ISO", 34),
+    ("FOCAL", 36),
+    ("FOCAL_35MM", 38),
+    ("PROGRAM", 40),
+    ("METERING", 41),
+    ("FLASH", 42),
+    ("TAKEN", 44),
+    ("KNOWN_EXPOSURE", 0x01),
+    ("KNOWN_COMPENSATION", 0x02),
+    ("KNOWN_FOCAL", 0x04),
+    ("KNOWN_TAKEN", 0x08),
+    ("KNOWN_FLASH", 0x10),
+    ("KNOWN_PROGRAM", 0x20),
+    ("KNOWN_METERING", 0x40),
+    ("KNOWN_ALL", 0x7f),
+];
 /// The picture scratch after the records: the masks, then the shot ring.
 pub const PICTURE_SCRATCH: usize = PICTURE_MASKS + SHOT_ENTRY + SHOT_STRIDE * SHOT_ENTRIES;
 /// Bytes of the live-view labels after the menu text (`artwork::overlay_labels`).
-pub const LABELS_SIZE: usize = 16384;
+pub const LABELS_SIZE: usize = 24576;
 /// The profile table after the labels (runtime/profile.h): for each of the
 /// first `PROFILE_MODULES` listed modules its code start, its code end, and 8
 /// ASCII bytes of its name, then a
@@ -446,15 +590,21 @@ pub const PROFILE_KINDS: [(&str, &str); 3] =
     [("paint", "PAINT"), ("filter", "FILTER"), ("call", "CALL")];
 pub const PROFILE_SLOT_COUNT: usize = PROFILE_POINTS.len() + PROFILE_MODULES * PROFILE_KINDS.len();
 pub const PROFILE_SIZE: usize = PROFILE_SLOTS + PROFILE_SLOT_COUNT * PROFILE_SLOT_SIZE;
+/// The own red and blue curves of the native looks with Toning, which INSTALL
+/// keeps so that a Toning change can make the record curves again: for each
+/// slot the 256 u16 red samples, then the blue ones.
+pub const TONE_CURVES: usize = PROFILE + PROFILE_SIZE;
+pub const TONE_SLOTS: usize = 4;
+pub const TONE_SLOT_SIZE: usize = 2 * 512;
 /// Everything after the records: the picture scratch, the menu text, the
-/// live-view labels, then the profile table.
-pub const TAIL_SIZE: usize = PROFILE + PROFILE_SIZE;
+/// live-view labels, the profile table, then the Toning curves.
+pub const TAIL_SIZE: usize = TONE_CURVES + TONE_SLOTS * TONE_SLOT_SIZE;
 // The summaries of every record in every menu language end before the
-// parameter page title.
+// value of a group page.
 const _: () = assert!(
     menu_text::TEXT_SUMMARY
         + MAX_COUNT * crate::language::Language::ALL.len() * menu_text::SUMMARY_UNITS * 2
-        <= menu_text::TEXT_SETTINGS
+        <= menu_text::TEXT_GROUP_VALUE
 );
 
 /// Wraps `text` into a C comment.
@@ -554,6 +704,31 @@ fn hue_tables(out: &mut String) {
         effects::FEATURE_HUE_LEVELS
     )
     .unwrap();
+    writeln!(
+        out,
+        "#define GRKIT_FEATURE_NATIVE_LOOK {}U",
+        effects::FEATURE_NATIVE_LOOK
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "#define GRKIT_FEATURE_FN_DEFAULTS {}U",
+        effects::FEATURE_FN_DEFAULTS
+    )
+    .unwrap();
+    define(
+        out,
+        "The default Fn adjustments of feature 64: 9 i8 (-4..4) in the order of \
+         GRKIT_RECORD_PARAMETERS, in a file of GRKIT_GRF_MAX_SIZE bytes.",
+        "GRF_FN_DEFAULTS",
+        format!("{}U", effects::FN_DEFAULTS),
+    );
+    writeln!(
+        out,
+        "#define GRKIT_GRF_FN_DEFAULTS_END {}U",
+        effects::FN_DEFAULTS_END
+    )
+    .unwrap();
     writeln!(out, "#define GRKIT_HUE_SIZE {}U", hue::SIZE).unwrap();
     writeln!(out, "#define GRKIT_HUE_MATRICES {}U", hue::SECTORS * 6).unwrap();
     define(
@@ -591,6 +766,26 @@ fn hue_tables(out: &mut String) {
         "HUE_LEVEL_CONTROL_HALVED",
         &hue::LEVEL_CONTROL_HALVED,
     );
+    define(
+        out,
+        "A native look (feature 32, grkit_core::native_look): 16 u16 bounds, 20 u8 \
+         bank selectors, 21 u16 control fields, and 5 u16 level gains from GRKIT_GRF_HUE; \
+         and 12 x 6 i16 level-0 coefficients and 4 x 12 x 6 i8 corrections of levels 1 \
+         to 4 from GRKIT_GRF_SIZE.",
+        "NATIVE_BOUNDS",
+        format!("{}U", native_look::BOUNDS),
+    );
+    for (name, value) in [
+        ("NATIVE_SELECTORS", native_look::SELECTORS),
+        ("NATIVE_CONTROL", native_look::CONTROL),
+        ("NATIVE_GAINS", native_look::GAINS),
+        ("NATIVE_HEAD_END", native_look::HEAD_END),
+        ("NATIVE_MATRICES", native_look::MATRICES),
+        ("NATIVE_CORRECTIONS", native_look::CORRECTIONS),
+        ("NATIVE_END", native_look::END),
+    ] {
+        writeln!(out, "#define GRKIT_{name} {value}U").unwrap();
+    }
 }
 
 /// The contents of `runtime/abi.h`.
@@ -618,6 +813,8 @@ pub fn header() -> String {
     writeln!(out, "#define GRKIT_MODULE_PAGES_MAX {MODULE_PAGES_MAX}").unwrap();
     writeln!(out, "#define GRKIT_MODULE_LAYERS_MAX {MODULE_LAYERS_MAX}").unwrap();
     writeln!(out, "#define GRKIT_MODULE_FILTERS_MAX {MODULE_FILTERS_MAX}").unwrap();
+    writeln!(out, "#define GRKIT_INDICATORS_MAX {INDICATORS_MAX}").unwrap();
+    writeln!(out, "#define GRKIT_STATUS_ICONS_MAX {STATUS_ICONS_MAX}").unwrap();
     writeln!(
         out,
         "#define GRKIT_MODULE_SETTINGS_MAX {}",
@@ -798,8 +995,9 @@ pub fn header() -> String {
          word is not enough. Word 0 counts the writes, and word 1 \
          (GRKIT_SHOT_LAST_TURNS) holds the turns of the last shot with a known posture. \
          Entry n is at GRKIT_SHOT_ENTRY + GRKIT_SHOT_STRIDE n and holds the key at \
-         GRKIT_SHOT_KEY, the record at GRKIT_SHOT_RECORD, and the posture of the \
-         electronic level at GRKIT_SHOT_POSTURE (runtime/processing.h).",
+         GRKIT_SHOT_KEY, the record at GRKIT_SHOT_RECORD, the posture of the \
+         electronic level at GRKIT_SHOT_POSTURE, and the effective capture crop \
+         at GRKIT_SHOT_FRAME_CROP (runtime/processing.h).",
         "SHOT_RING",
         PICTURE_MASKS,
     );
@@ -810,11 +1008,22 @@ pub fn header() -> String {
         ("KEY", SHOT_KEY),
         ("RECORD", SHOT_RECORD),
         ("POSTURE", SHOT_POSTURE),
+        ("FRAME_CROP", SHOT_FRAME_CROP),
         ("LAST_TURNS", SHOT_LAST_TURNS),
     ] {
         writeln!(out, "#define GRKIT_SHOT_{name} {value}").unwrap();
     }
     writeln!(out, "#define GRKIT_PICTURE_SCRATCH {PICTURE_SCRATCH}").unwrap();
+    out.push('\n');
+
+    out.push_str(
+        "/* The layout of GrkitShot (runtime/sdk/grkit.h) that picture_shot fills:\n   \
+         its size in bytes, the byte offset of each field, and the bits of\n   \
+         `known`. tests/runtime/layout_contract.c checks them against the SDK. */\n",
+    );
+    for (name, value) in SHOT_INFO {
+        writeln!(out, "#define GRKIT_SHOT_INFO_{name} {value}").unwrap();
+    }
     out.push('\n');
 
     define(
@@ -874,6 +1083,15 @@ pub fn header() -> String {
         "TAIL_SIZE",
         TAIL_SIZE,
     );
+    define(
+        &mut out,
+        "The own red and blue curves of the native looks with Toning: for each of \
+         GRKIT_TONE_SLOTS slots, 256 u16 red samples, then the blue ones.",
+        "TONE_CURVES",
+        TONE_CURVES,
+    );
+    writeln!(out, "#define GRKIT_TONE_SLOTS {TONE_SLOTS}").unwrap();
+    writeln!(out, "#define GRKIT_TONE_SLOT_SIZE {TONE_SLOT_SIZE}").unwrap();
     writeln!(
         out,
         "#define GRKIT_TEXT_SUMMARY {}",
@@ -895,6 +1113,20 @@ pub fn header() -> String {
         "TEXT_SETTINGS",
         menu_text::TEXT_SETTINGS,
     );
+    define(
+        &mut out,
+        "The value of a group page in MENU and on the ADJ root, before the \
+         native settings page: the titles of the children that are on, joined \
+         by a slash, GRKIT_TEXT_GROUP_UNITS units with the NUL.",
+        "TEXT_GROUP_VALUE",
+        menu_text::TEXT_GROUP_VALUE,
+    );
+    writeln!(
+        out,
+        "#define GRKIT_TEXT_GROUP_UNITS {}",
+        menu_text::GROUP_UNITS
+    )
+    .unwrap();
     writeln!(
         out,
         "#define GRKIT_TEXT_LANGUAGES {}",

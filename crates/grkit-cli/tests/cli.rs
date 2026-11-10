@@ -171,7 +171,7 @@ fn effect_compilation_is_independent_of_target_capacity() {
         text(&archive),
     ]);
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("at most 20"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("at most 40"));
     assert!(!archive.exists());
 }
 
@@ -294,9 +294,9 @@ fn package_roundtrip_and_output_ownership() {
         text(&zip),
     ];
     let packaged = success(&args);
-    // Eleven runtime, package list, and document entries, the five official
+    // Twelve runtime, package list, and document entries, the six official
     // modules, then one per effect.
-    assert_eq!(packaged["entries"], 16 + source_count());
+    assert_eq!(packaged["entries"], 18 + source_count());
     assert_eq!(success(&["verify", text(&zip)])["effects"], source_count());
     let before = fs::read(&zip).unwrap();
     assert!(!run(&args).status.success());
@@ -414,7 +414,7 @@ fn package_installs_the_given_modules() {
         "--out",
         text(&zip),
     ]);
-    assert_eq!(packaged["entries"], 13 + source_count());
+    assert_eq!(packaged["entries"], 14 + source_count());
     assert_eq!(packaged["modules"], json!(["DATE", "FILMLOOK"]));
     let verified = success(&["verify", text(&zip)]);
     assert_eq!(verified["modules"], json!(["DATE", "FILMLOOK"]));
@@ -432,7 +432,7 @@ fn package_installs_the_given_modules() {
         "--out",
         text(&stamp_only),
     ]);
-    assert_eq!(packaged["entries"], 12);
+    assert_eq!(packaged["entries"], 13);
     assert_eq!(success(&["verify", text(&stamp_only)])["effects"], 0);
     // Image Control alone without effects, effects without Image Control, a
     // module twice, and a missing module file show nothing or fail.
@@ -706,7 +706,7 @@ fn site_export_publishes_only_the_verified_runtime() {
     let site = tmp.path().join("site");
     let result = success(&["site", "--build", text(&build), "--out", text(&site)]);
     assert_eq!(result["target"], "gr3-2.10");
-    assert_eq!(result["files"], 6);
+    assert_eq!(result["files"], 7);
 
     let exported = site.join("runtime/gr3-2.10");
     assert_eq!(
@@ -913,4 +913,42 @@ fn release_plan_builds_each_target_and_packages_each_camera() {
             {"camera": "gr4", "targets": ["gr4-1.11", "gr4-1.20", "gr4-1.20-0528"], "name": "gr4"},
         ])
     );
+}
+
+#[test]
+fn native_looks_need_a_supported_gr4_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("fwdc248b.bin");
+    std::fs::write(&file, [0u8; 256]).unwrap();
+    let output = run(&[
+        "effects",
+        "native",
+        "--firmware",
+        file.to_str().unwrap(),
+        "--out",
+        tmp.path().join("out").to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("1.11, 1.20"), "{error}");
+    assert!(!tmp.path().join("out").exists());
+}
+
+#[test]
+fn firmware_patch_takes_only_an_official_update_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("fwdc239b.bin");
+    fs::write(&input, vec![0u8; 4096]).unwrap();
+    let out = directory.path().join("out.bin");
+    let output = run(&[
+        "firmware",
+        "patch",
+        "--firmware",
+        text(&input),
+        "--out",
+        text(&out),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Not an official update file"));
+    assert!(!out.exists());
 }

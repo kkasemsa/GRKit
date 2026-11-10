@@ -62,6 +62,43 @@ fn generated_header_matches_fixed_synthetic_contract() -> Result<()> {
 }
 
 #[test]
+fn generated_header_keeps_module_start_and_relocation_span_in_sync() -> Result<()> {
+    let body = synthetic_gr3();
+    let tail = body.target.layout.tail;
+    for (last_size, expected_span) in [(0xc001, 0xc800), (0xd001, 0xd800)] {
+        let plan = PatchPlan {
+            patches: [(0x100, 0x504), (0x700, last_size)]
+                .into_iter()
+                .map(|(offset, size)| Patch {
+                    address: tail + offset,
+                    points: 0,
+                    before: vec![0; size],
+                    after: vec![1; size],
+                    site: Some(Anchor::Tail),
+                })
+                .collect(),
+            relocations: vec![],
+            references: vec![],
+            exports: vec![],
+        };
+        validate_plan(&plan)?;
+        let header = loader::header(&plan, &body, TEST_VERSION)?;
+        assert!(header.contains(&format!("#define TAIL_BYTES {expected_span:#x}U\n")));
+        let table = header
+            .lines()
+            .find(|line| {
+                line.starts_with("static const struct relocation_tables relocation_tables")
+            })
+            .context("Missing relocation table")?;
+        assert!(
+            table.ends_with(&format!(",{expected_span:#x}}};")),
+            "{table}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn generated_header_marks_only_rtos_tail_patches_as_unchecked() -> Result<()> {
     let plan = PatchPlan {
         exports: vec![],
@@ -74,11 +111,11 @@ fn generated_header_marks_only_rtos_tail_patches_as_unchecked() -> Result<()> {
                 site: None,
             },
             Patch {
-                address: target::GR3_210.layout.tail.0,
+                address: target::GR3_210.layout.tail,
                 points: 0,
                 before: vec![0; 4],
                 after: vec![1, 2, 3, 4],
-                site: None,
+                site: Some(Anchor::Tail),
             },
         ],
         relocations: vec![(0, 0)],
@@ -94,28 +131,39 @@ fn generated_header_marks_only_rtos_tail_patches_as_unchecked() -> Result<()> {
 fn generated_header_gives_the_points_of_each_patch() -> Result<()> {
     let plan = PatchPlan {
         exports: vec![],
-        patches: vec![Patch {
-            address: target::GR3_210.layout.tail.0,
-            points: 0,
-            before: vec![0; 4],
-            after: vec![1, 2, 3, 4],
-            site: None,
-        }],
+        patches: vec![
+            Patch {
+                address: target::GR3_210.layout.tail,
+                points: 0,
+                before: vec![0; 4],
+                after: vec![1, 2, 3, 4],
+                site: Some(Anchor::Tail),
+            },
+            Patch {
+                address: 0x531a48f0,
+                points: components::Point::Tuning.bit() | components::Point::CaptureAspect.bit(),
+                before: vec![0; 4],
+                after: vec![1, 2, 3, 4],
+                site: None,
+            },
+        ],
         relocations: vec![],
         references: Vec::new(),
     };
     let header = loader::header(&plan, &synthetic_gr3(), TEST_VERSION)?;
     assert!(header.contains("{0x540b6000,4,1,before_0,after_0},"));
-    // Code in the tail belongs to no extension point.
-    assert!(header.contains("static const u32 patch_points[] = {0x0};"));
+    // Code in the tail is unconditional. A shared hook keeps both bits so
+    // installing either capability installs its shot sampler.
+    assert!(header.contains("static const u32 patch_points[] = {0x0,0xa};"));
     // CORE.TONE needs the tuning and picture encode points (bits 1 and 4),
     // CORE.ASPECT the overlay and capture aspect points (bits 2 and 3),
     // CORE.GRAIN the grain point (bit 5), and CORE.GRAIN_SIZE the grain size
-    // point (bit 6).
+    // point (bit 6). CORE.ASPECT_MODE shares the aspect points.
     assert!(header.contains(
-        "static const char *const core_setting_names[] = {\"CORE.TONE\",\"CORE.ASPECT\",\"CORE.GRAIN\",\"CORE.GRAIN_SIZE\"};"
+        "static const char *const core_setting_names[] = {\"CORE.TONE\",\"CORE.ASPECT\",\"CORE.GRAIN\",\"CORE.GRAIN_SIZE\",\"CORE.ASPECT_MODE\",\"CORE.ADJ\",\"CORE.ADJ_MODULE\"};"
     ));
-    assert!(header.contains("static const u32 core_setting_points[] = {0x12,0xc,0x20,0x40};"));
+    assert!(header
+        .contains("static const u32 core_setting_points[] = {0x12,0xc,0x20,0x40,0xc,0x0,0x0};"));
     Ok(())
 }
 
@@ -138,16 +186,21 @@ fn menu_assembly_symbols_are_typed_functions() {
         );
     }
     assert!(globals > 0);
+    // The viewfinder now has Thumb helpers too. A missing function type
+    // makes their call to the A32 header accessor enter in the wrong state.
+    let framing = include_str!("../../../../runtime/framing.S");
+    assert!(framing.contains(".global framing_header\n.type framing_header, %function\n"));
 }
 
 #[test]
 fn production_scripts_and_activation_match_fixed_contracts() {
     let files = grkit_core::runtime::runtime_files(b"ELF");
-    assert_eq!(files.len(), 5);
+    assert_eq!(files.len(), 6);
     assert_eq!(files["SCRIPT/GRKIT/CORE.BIN"], b"ELF");
     for (path, name) in [
         ("SCRIPT/STARTUP.TTL", "STARTUP.TTL"),
         ("SCRIPT/GRKIT/LOADER.TTL", "LOADER.TTL"),
+        ("SCRIPT/GRKIT/RESIDENT.TTL", "RESIDENT.TTL"),
         ("SCRIPT/GRKIT/SCAN.SH", "SCAN.SH"),
         ("SCRIPT/GRKIT/INSTALL.SH", "INSTALL.SH"),
     ] {
@@ -156,6 +209,14 @@ fn production_scripts_and_activation_match_fixed_contracts() {
     assert!(!files
         .values()
         .any(|data| data.windows(8).any(|part| part == b"--select")));
+    // The loader of a GR III package with its fast-boot files.
+    let fast: Vec<_> = ["2.10", "2.20"]
+        .map(|firmware| {
+            grkit_core::runtime::FastRelease::new(&grkit_core::camera::GR3, firmware).unwrap()
+        })
+        .into();
+    let loader = grkit_core::runtime::loader_with(grkit_core::runtime::ICON_STRIDE, &fast);
+    snapshot("LOADER-FAST.TTL", std::str::from_utf8(&loader).unwrap());
     // Each camera gets the same files under its own ModeSet name.
     for (camera, modeset) in [
         (&grkit_core::camera::GR3, "00078350.588"),

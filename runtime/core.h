@@ -34,8 +34,15 @@ typedef short s16;
 #define GRKIT_ICON_OFF 0x7fffU
 #define GRKIT_ICON_GRKIT 0x7ffeU
 #define GRKIT_ICON_EFFECT(n) (0x8000U+(n))
-/* The Modules tile. The installer puts it after the Version tile. */
+/* Core live-view label n in the status row (icon kind GRKIT_ICON_LABEL). */
+#define GRKIT_ICON_CORE_LABEL(n) (0x7f00U+(n))
+/* The Modules tile. The installer puts it after the Version tile, then the
+   Modules tile with a line through it (Enable GRKit Off). */
 #define GRKIT_ICON_MODULES 0x7ffcU
+#define GRKIT_ICON_MODULES_OFF 0x7ffbU
+/* The Fn hint of a row where Fn turns a setting to its next value. The
+   installer puts it after the Modules Off tile. */
+#define GRKIT_ICON_ROTATE 0x7ffaU
 
 /* One setting of a native settings page: its row label, its values (at most
    SETTING_VALUES, grkit_core::runtime::NATIVE_SETTING_VALUES), the text of a
@@ -115,7 +122,8 @@ typedef struct {
 #define DISPLAY_OFF 3U
 GRKIT_MAYBE_UNUSED static u32 native_display(void);
 /* Live-view labels (GRKIT_LABELS): the load cue, then capture area n, then
-   the Date Imprint sign (LABEL_DATE in runtime/sdk/grkit.h). */
+   the Date Imprint sign (LABEL_DATE in runtime/sdk/grkit.h), then the Date
+   Imprint formats. */
 #define LABEL_GRKIT 0U
 /* The top of a label in the second row of the native live-view text. Its
    capitals then share the baseline of the focus distance, such as "2.5m". */
@@ -142,7 +150,9 @@ static inline u32 chroma_row(const Plane *p,u32 y) { return p->c+(p->half ? y>>1
 /* The deduplicated planes of one encode. `record` is the processing record of
    the shot, or 0 for native processing, and `mono` is set for a monochrome
    record or a native monochrome Image Control type. `scratch` holds GRKIT_PICTURE_MASKS bytes for this call.
-   `turns` is the quarter turns clockwise that show the picture upright. */
+   `turns` is the quarter turns clockwise that show the picture upright.
+   `shot` is the shot settings pointer of the encode (picture_shot); the SDK
+   declares it as `reserved_shot`, which a module does not use. */
 typedef struct {
     Plane planes[4];
     u32 count;
@@ -150,6 +160,7 @@ typedef struct {
     u32 mono;
     u8 *scratch;
     u32 turns;
+    u32 shot;
 } PictureSet;
 /* Core services for the planes. */
 /* Unsigned division: the freestanding link has no division helper. */

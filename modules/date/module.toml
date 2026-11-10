@@ -52,11 +52,11 @@ apply = "date_apply"
 setting = "STYLE"
 stage = "mark"
 
-# The sign that Date Imprint is on shows with the full display, next to the
-# Framing ratio label, like the top rows of native settings.
-[[layers]]
-paint = "date_badge"
-setting = "STYLE"
-order = 40
-full_disp = true
-live_only = true
+[[indicators]]
+id = "date"
+placement = "status_row"
+enabled = { setting = "STYLE", not_equals = 0 }
+# The viewfinder shows the format as live-view text: the core label after DATE
+# for each STYLE (YMD, YMD HM, MDY, DMY, DMY HM). STYLE 0 maps to DATE, but
+# the indicator is hidden while Date Imprint is Off.
+icon = { setting = "STYLE", label = "DATE" }

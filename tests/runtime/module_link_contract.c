@@ -19,9 +19,10 @@ enum {
     KEY2 = 34,       /* "LOOK" */
     USES = 36,       /* one name pointer */
     USE_NAME = 37,   /* "?CORE.ASPECT" */
-    PAGE = 41,       /* {size, kind, setting, flags, title, summaries, labels, rows, setting rows, settings} */
+    PAGE = 41,       /* {size, kind, setting, flags, title, summaries, labels, rows, setting rows, settings,
+                        children, icon, fn value, fn setting} */
     /* Each text list has one pointer for each language (L). */
-    TITLE = 51,                     /* L text pointers */
+    TITLE = 55,                     /* L text pointers */
     SUMMARIES = TITLE + GRM_LANGUAGES,   /* 2 values x L */
     LABELS = SUMMARIES + 2 * GRM_LANGUAGES, /* 2 values x L */
     ROWS = LABELS + 2 * GRM_LANGUAGES,   /* {size, setting, label, values} x 2 */
@@ -37,7 +38,9 @@ static u32 code_words[CODE_WORDS], data_words[2];
 static u32 relocations[128], relocation_count;
 static u32 import_hash, abi;
 static const char *id;
-static u8 file[GRM_HEADER + CODE_WORDS * 4 + 1024];
+static u8 file[GRM_HEADER + CODE_WORDS * 4 + 1024 + 3 * GRM_TILE_BYTES];
+/* The tiles after the import names (ABI 2.3), filled with 0xa5. */
+static u32 file_tiles;
 static u32 file_size;
 
 static u32 fnv(const char *s)
@@ -57,6 +60,7 @@ static void reset(void)
 {
     memset(code_words, 0, sizeof code_words);
     relocation_count = 0;
+    file_tiles = 0;
     abi = GRM_ABI_MAJOR << 16 | GRM_ABI_MINOR;
     id = "PROBE";
     import_hash = fnv("overlay_label");
@@ -123,7 +127,19 @@ static void build(void)
     grm_put(p, 0); grm_put(p + 4, 4); p += 8;
     grm_put(p, import_hash); grm_put(p + 4, IMPORT * 4); p += 8;
     memcpy(p, "overlay_label\0\0\0", 16); p += 16;
+    grm_put(file + 60, file_tiles);
+    memset(p, 0xa5, file_tiles * GRM_TILE_BYTES); p += file_tiles * GRM_TILE_BYTES;
     file_size = (u32)(p - file);
+}
+/* Move the tiles out of the code, as grkit module build does since ABI 2.3:
+   the descriptor has no tile address, and n tiles follow the file. */
+static void tiles_after_file(u32 n)
+{
+    code_words[DESCRIPTOR + 8] = 0;
+    for (u32 i = 0; i < relocation_count; ++i)
+        if (relocations[i] == (DESCRIPTOR + 8) * 4) relocations[i--] = relocations[--relocation_count];
+    code_words[DESCRIPTOR + 9] = n;
+    file_tiles = n;
 }
 
 #define CODE_BASE 0x543dc000U
@@ -158,8 +174,138 @@ static int registrations(void)
     return status;
 }
 
+/* Reuse a tile's bytes for descriptor storage in this synthetic module.
+   The linker does not interpret the artwork pixels. */
+#define INDICATOR_AT TILES
+#define CONDITIONS_AT (TILES + 6)
+#define ICON_AT (TILES + 9)
+static void indicator_reset(void)
+{
+    reset();
+    code_words[REGISTRATIONS + 4] = GRM_POINT_VIEWFINDER_INDICATOR;
+    code_words[REGISTRATIONS + 5] = INDICATOR_AT * 4;
+    code_words[INDICATOR_AT] = GRM_INDICATOR;
+    code_words[INDICATOR_AT + 1] = GRM_INDICATOR_STATUS_ROW;
+    code_words[INDICATOR_AT + 3] = 1;
+    pointer(INDICATOR_AT + 4, CONDITIONS_AT, 0);
+    pointer(INDICATOR_AT + 5, ICON_AT, 0);
+    code_words[CONDITIONS_AT] = 0;
+    code_words[CONDITIONS_AT + 1] = GRM_CONDITION_EQUALS;
+    code_words[CONDITIONS_AT + 2] = 1;
+    code_words[ICON_AT] = GRM_ICON;
+    code_words[ICON_AT + 1] = GRM_ICON_TILE;
+    code_words[ICON_AT + 2] = 0;
+}
+/* Keep the original 20-byte layer fixture intact for compatibility checks. */
+#define CONDITIONAL_LAYER_AT TILES
+#define LAYER_CONDITIONS_AT (TILES + 7)
+static void conditional_layer_reset(void)
+{
+    reset();
+    code_words[REGISTRATIONS + 1] = CONDITIONAL_LAYER_AT * 4;
+    code_words[CONDITIONAL_LAYER_AT] = GRM_LAYER_CONDITIONAL;
+    pointer(CONDITIONAL_LAYER_AT + 2, PAINT, 1);
+    code_words[CONDITIONAL_LAYER_AT + 4] = 20;
+    code_words[CONDITIONAL_LAYER_AT + 5] = 1;
+    pointer(CONDITIONAL_LAYER_AT + 6, LAYER_CONDITIONS_AT, 0);
+    code_words[LAYER_CONDITIONS_AT] = 1;
+    code_words[LAYER_CONDITIONS_AT + 1] = GRM_CONDITION_EQUALS;
+    code_words[LAYER_CONDITIONS_AT + 2] = 0;
+}
+static void layers_validate_optional_conditions(void)
+{
+    reset();
+    abi = GRM_ABI_MAJOR << 16 | 2;
+    assert(registrations() == 0 && layers[0].descriptor == 0);
+    conditional_layer_reset();
+    assert(registrations() == 0 && layers[0].descriptor == CODE_BASE + CONDITIONAL_LAYER_AT * 4);
+    conditional_layer_reset(); code_words[LAYER_CONDITIONS_AT + 1] = GRM_CONDITION_NOT_EQUALS;
+    assert(registrations() == 0);
+    conditional_layer_reset(); code_words[LAYER_CONDITIONS_AT] = GRM_USED;
+    assert(registrations() == 0); /* Resolve the used setting in INSTALL. */
+    conditional_layer_reset(); code_words[CONDITIONAL_LAYER_AT + 5] = 0;
+    assert(registrations() == GRM_BAD_DESCRIPTOR); /* No conditions needs a null pointer. */
+    conditional_layer_reset(); code_words[CONDITIONAL_LAYER_AT + 5] = 0;
+    code_words[CONDITIONAL_LAYER_AT + 6] = 0;
+    /* A null pointer is not a code relocation. */
+    --relocation_count;
+    assert(registrations() == 0 && layers[0].descriptor == 0);
+    for (u32 size = GRM_LAYER + 1; size < GRM_LAYER_CONDITIONAL; ++size) {
+        conditional_layer_reset(); code_words[CONDITIONAL_LAYER_AT] = size;
+        assert(registrations() == GRM_BAD_DESCRIPTOR);
+    }
+    conditional_layer_reset(); code_words[CONDITIONAL_LAYER_AT + 5] = GRM_CONDITIONS_MAX + 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    conditional_layer_reset(); code_words[LAYER_CONDITIONS_AT] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    conditional_layer_reset(); code_words[LAYER_CONDITIONS_AT + 1] = 3;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    conditional_layer_reset(); code_words[LAYER_CONDITIONS_AT + 2] = 3;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    conditional_layer_reset(); ++code_words[CONDITIONAL_LAYER_AT + 6];
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    conditional_layer_reset(); code_words[CONDITIONAL_LAYER_AT + 6] = CODE_WORDS * 4 - 4;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+}
+
+static void indicators_validate_resources_and_conditions(void)
+{
+    u32 indicators[GRM_REGISTRATIONS];
+    indicator_reset();
+    assert(registrations() == 0);
+    assert(grm_indicators(&m, code, CODE_BASE, indicators) == 1 && indicators[0] == CODE_BASE + INDICATOR_AT * 4);
+    assert(layer_count == 1 && page_count == 1 && filter_count == 0);
+    indicator_reset(); code_words[CONDITIONS_AT + 2] = 0;
+    assert(registrations() == 0); /* Zero is a valid condition operand. */
+    indicator_reset(); code_words[INDICATOR_AT + 1] = GRM_INDICATOR_NATIVE_SLOT;
+    code_words[INDICATOR_AT + 2] = GRM_SLOT_IMAGE_CONTROL;
+    assert(registrations() == 0);
+    code_words[INDICATOR_AT + 2] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[INDICATOR_AT + 2] = GRM_SLOT_IMAGE_CONTROL;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[INDICATOR_AT + 3] = 0;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[INDICATOR_AT + 3] = GRM_CONDITIONS_MAX + 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[CONDITIONS_AT] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[CONDITIONS_AT + 1] = 3;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[CONDITIONS_AT + 2] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[ICON_AT + 3] = 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR); /* Two values need two tiles. */
+    code_words[ICON_AT + 2] = GRM_NO_SETTING;
+    assert(registrations() == 0); /* A fixed tile needs only one. */
+    indicator_reset(); code_words[ICON_AT + 1] = GRM_ICON_TONE;
+    assert(registrations() == GRM_BAD_DESCRIPTOR); /* Tone requires a used setting. */
+    indicator_reset(); code_words[ICON_AT + 2] = GRM_USED;
+    assert(registrations() == 0); /* Full range checked when uses resolve. */
+    indicator_reset(); code_words[INDICATOR_AT + 4] = CODE_WORDS * 4 - 4;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    /* A status-row indicator can show a core label: label first + value, or
+       the label first without a setting. Every value needs a label. */
+    indicator_reset(); code_words[ICON_AT + 1] = GRM_ICON_LABEL; code_words[ICON_AT + 3] = GRM_LABELS - 2;
+    assert(registrations() == 0); /* MODE has two values: labels 7 and 8. */
+    code_words[ICON_AT + 3] = GRM_LABELS - 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    code_words[ICON_AT + 2] = GRM_NO_SETTING;
+    assert(registrations() == 0);
+    code_words[ICON_AT + 3] = GRM_LABELS;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    indicator_reset(); code_words[ICON_AT + 1] = GRM_ICON_LABEL; code_words[ICON_AT + 2] = GRM_USED;
+    assert(registrations() == 0); /* Checked when uses resolve. */
+    /* The Image Control slot cannot show a label. */
+    indicator_reset(); code_words[ICON_AT + 1] = GRM_ICON_LABEL; code_words[ICON_AT + 2] = GRM_NO_SETTING;
+    code_words[INDICATOR_AT + 1] = GRM_INDICATOR_NATIVE_SLOT; code_words[INDICATOR_AT + 2] = GRM_SLOT_IMAGE_CONTROL;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+}
+
 int main(void)
 {
+    indicators_validate_resources_and_conditions();
+    layers_validate_optional_conditions();
     u32 failed = 99;
     const u8 *tiles;
     u32 tile_count;
@@ -175,6 +321,7 @@ int main(void)
     assert(grm_word(data) == CODE_BASE + 1 && grm_word(data + 4) == DATA_BASE + 8);
     assert(setting_count == 2 && strcmp(settings[0].key, "MODE") == 0 && strcmp(settings[1].key, "LOOK") == 0);
     assert(settings[0].values == 2 && settings[0].flags == GRM_SETTING_SAVED);
+    assert(settings[0].default_value == 0 && settings[1].default_value == 0);
     assert(use_count == 1 && strcmp(uses[0], "?CORE.ASPECT") == 0);
     assert(layer_count == 1 && layers[0].paint == CODE_BASE + 1 && layers[0].setting == 0);
     assert(layers[0].flags == GRM_LAYER_FOLLOW_DISP && layers[0].order == 20);
@@ -190,13 +337,69 @@ int main(void)
     assert(grm_state_id("GUIDES.STYLE") == 604351797U);
     assert(grm_state_id("PROBE.MODE") == 221689958U);
 
+    /* ABI 2.0 uses 16-byte settings and defaults to zero. */
+    reset(); abi = GRM_ABI_MAJOR << 16;
+    assert(registrations() == 0 && setting_count == 2);
+    assert(settings[0].default_value == 0 && settings[1].default_value == 0);
+
+    /* Extended settings use their size as their stride. Read two defaults,
+       accept a future trailing word, and reject invalid or truncated entries. */
+    reset();
+    code_words[DESCRIPTOR + 4] = TILES * 4;
+    code_words[TILES] = 24; code_words[TILES + 1] = KEY * 4;
+    code_words[TILES + 2] = 2; code_words[TILES + 3] = GRM_SETTING_SAVED;
+    code_words[TILES + 4] = 1;
+    code_words[TILES + 6] = 20; code_words[TILES + 7] = KEY2 * 4;
+    code_words[TILES + 8] = 3; code_words[TILES + 9] = 0; code_words[TILES + 10] = 2;
+    relocations[relocation_count++] = (TILES + 1) * 4;
+    relocations[relocation_count++] = (TILES + 7) * 4;
+    assert(registrations() == 0 && setting_count == 2);
+    assert(settings[0].default_value == 1 && settings[1].default_value == 2);
+    code_words[TILES + 10] = 3;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    code_words[TILES + 10] = 2;
+    code_words[TILES] = 18;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    code_words[TILES] = 0xfffffffcU;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+
+    /* A settings entry has one module tile and no choice texts. Its first
+       native row still owns the setting and the count of its values. */
+    reset(); code_words[PAGE + 1] = GRM_PAGE_SETTINGS; code_words[PAGE + 3] = 0; code_words[PAGE + 8] = 2;
+    code_words[DESCRIPTOR + 9] = 1;
+    code_words[PAGE + 5] = 0; code_words[PAGE + 6] = 0;
+    assert(registrations() == 0 && page_count == 1);
+    code_words[PAGE + 8] = 0;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    code_words[PAGE + 8] = 2; code_words[PAGE + 3] = GRM_CHOICE_OPTIONS;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    code_words[PAGE + 3] = 0; code_words[DESCRIPTOR + 9] = 0;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+
     /* Settings that the installer does not accept. */
     reset(); bytes(KEY, "Mode", 5);
     assert(registrations() == GRM_BAD_DESCRIPTOR);
     reset(); code_words[SETTING + 2] = GRM_SETTING_VALUES + 1;
     assert(registrations() == GRM_BAD_DESCRIPTOR);
-    reset(); code_words[SETTING + 3] = 4;
+    reset(); code_words[SETTING + 3] = 8;
     assert(registrations() == GRM_BAD_DESCRIPTOR);
+    /* ABI 2.4: a color-only setting. */
+    reset(); code_words[SETTING + 3] = GRM_SETTING_SAVED | GRM_SETTING_COLOR_ONLY;
+    assert(registrations() == 0);
+
+    /* ABI 2.4: the flags of a module after the 40 bytes of the descriptor. A
+       40-byte descriptor has none. The word after it (here the size of the
+       first setting) is the flags of a 44-byte one. */
+    {
+        u32 flags = 99;
+        reset(); build();
+        assert(grm_parse(file, file_size, &m) == 0 && grm_module_flags(&m, m.code, &flags) == 0 && flags == 0);
+        reset(); code_words[DESCRIPTOR] = GRM_DESCRIPTOR_FLAGS; code_words[SETTING] = GRM_MODULE_COLOR_ONLY; build();
+        assert(grm_parse(file, file_size, &m) == 0 && grm_module_flags(&m, m.code, &flags) == 0);
+        assert(flags == GRM_MODULE_COLOR_ONLY);
+        reset(); code_words[DESCRIPTOR] = GRM_DESCRIPTOR_FLAGS; code_words[SETTING] = 2; build();
+        assert(grm_parse(file, file_size, &m) == 0 && grm_module_flags(&m, m.code, &flags) == GRM_BAD_DESCRIPTOR);
+    }
 
     /* Layers: an unknown flag, a setting that the module does not have. A
        layer without a setting is valid. */
@@ -262,7 +465,33 @@ int main(void)
     /* A page can have options; another flag is an error. */
     reset(); code_words[PAGE + 3] = GRM_CHOICE_OPTIONS;
     assert(registrations() == 0 && page_count == 1);
-    reset(); code_words[PAGE + 3] = 8;
+    reset(); code_words[PAGE + 3] = GRM_PAGE_MENU_ONLY;
+    assert(registrations() == 0 && pages[0].flags == GRM_PAGE_MENU_ONLY);
+    reset(); code_words[PAGE + 3] = 16;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    /* ABI 2.5: Fn on the row of a value other than Off steps another setting
+       with two values or more, of the module or used. Value 0 ignores the
+       setting. A page that the module does not give rows has none. */
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 1;
+    assert(registrations() == 0 && page_count == 1);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = GRM_USED;
+    assert(registrations() == 0);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 13] = 9;
+    assert(registrations() == 0);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 0;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 2; code_words[PAGE + 13] = 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 1;
+    code_words[SETTING + 6] = 1;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 1;
+    code_words[PAGE + 1] = GRM_PAGE_SETTINGS; code_words[PAGE + 3] = 0; code_words[PAGE + 8] = 2;
+    assert(registrations() == GRM_BAD_DESCRIPTOR);
+    reset(); code_words[PAGE] = GRM_PAGE_FN; code_words[PAGE + 12] = 1; code_words[PAGE + 13] = 1;
+    code_words[PAGE + 2] = GRM_USED; code_words[PAGE + 3] = GRM_CHOICE_CORE_ROWS; code_words[PAGE + 7] = 0;
     assert(registrations() == GRM_BAD_DESCRIPTOR);
     /* Filters: a stage of the core, a setting that the module has, and
        apply code. */
@@ -338,5 +567,29 @@ int main(void)
     assert(link(&failed) == GRM_BAD_FILE);
     reset(); build(); grm_put(file + 36, 0xffffffdcU);
     assert(grm_parse(file, file_size, &m) == GRM_BAD_FILE);
+
+    /* Since ABI 2.3 the tiles follow the file: the descriptor gives their
+       count and no address, and INSTALL copies them from the file. */
+    reset(); tiles_after_file(2);
+    assert(registrations() == 0);
+    assert(m.tile_count == 2 && m.tiles == file + file_size - 2 * GRM_TILE_BYTES);
+    assert(grm_tiles(&m, code, CODE_BASE, &tiles, &tile_count) == 0 && tile_count == 2 && tiles == m.tiles);
+    assert(tiles[0] == 0xa5 && tiles[2 * GRM_TILE_BYTES - 1] == 0xa5);
+    assert(grm_tiles(&m, m.code, 0, &tiles, &tile_count) == 0 && tiles == m.tiles);
+    /* The descriptor count must match the tiles of the file. */
+    reset(); tiles_after_file(2); code_words[DESCRIPTOR + 9] = 1;
+    assert(link(&failed) == 0 && grm_tiles(&m, code, CODE_BASE, &tiles, &tile_count) == GRM_BAD_DESCRIPTOR);
+    reset(); tiles_after_file(2); file_tiles = 0;
+    assert(link(&failed) == 0 && grm_tiles(&m, code, CODE_BASE, &tiles, &tile_count) == GRM_BAD_DESCRIPTOR);
+    /* Tiles in the code and after the file. */
+    reset(); file_tiles = 2;
+    assert(link(&failed) == 0 && grm_tiles(&m, code, CODE_BASE, &tiles, &tile_count) == GRM_BAD_DESCRIPTOR);
+    /* Tiles after the file of an older ABI, too many tiles, or a short file. */
+    reset(); tiles_after_file(2); abi = GRM_ABI_MAJOR << 16 | 2; build();
+    assert(grm_parse(file, file_size, &m) == GRM_BAD_FILE);
+    reset(); tiles_after_file(2); build(); grm_put(file + 60, GRM_TILES + 1);
+    assert(grm_parse(file, file_size, &m) == GRM_BAD_FILE);
+    reset(); tiles_after_file(2); build();
+    assert(grm_parse(file, file_size - 1, &m) == GRM_BAD_FILE);
     return 0;
 }

@@ -5,6 +5,8 @@ import {
   cardEffects,
   cardModules,
   hasChanges,
+  cardHint,
+  isAppleMobileDevice,
   isMobileDevice,
   parseList,
   parseReport,
@@ -254,6 +256,7 @@ describe('planChanges', () => {
       removeModules: [],
       addEffects: [],
       removeEffects: [],
+      updateEffects: [],
     });
     const changes = planChanges(state, '1.3.1', ['DATE'], effects(state, ['CCCCCCCC.GRF']));
     expect(changes).toEqual({
@@ -264,10 +267,26 @@ describe('planChanges', () => {
       removeModules: ['GUIDES'],
       addEffects: ['CCCCCCCC.GRF'],
       removeEffects: ['AAAAAAAA.GRF'],
+      updateEffects: [],
     });
     expect(hasChanges(changes)).toBe(true);
     // Without Film Look, the effects stay as they are.
     expect(planChanges(state, '1.3.0', ['GUIDES'], null).removeEffects).toEqual([]);
+  });
+
+  it('replaces the changed effects that stay on the card', async () => {
+    const state = await readCard(await current());
+    const same = effects(state, ['AAAAAAAA.GRF']);
+    // A changed effect that stays is the only change.
+    const changes = planChanges(state, '1.3.0', ['GUIDES'], { ...same, changed: ['AAAAAAAA.GRF', 'CCCCCCCC.GRF'] });
+    expect(changes.updateEffects).toEqual(['AAAAAAAA.GRF']);
+    expect(hasChanges(changes)).toBe(true);
+    // A changed effect that the write adds or removes is no update.
+    const removed = planChanges(state, '1.3.0', ['GUIDES'], {
+      ...effects(state, ['CCCCCCCC.GRF']),
+      changed: ['AAAAAAAA.GRF'],
+    });
+    expect(removed.updateEffects).toEqual([]);
   });
 
   it('installs on a card without GRKit', async () => {
@@ -296,6 +315,7 @@ describe('planChanges', () => {
       removeModules: ['FRAMING', 'DATE', 'GRAIN'],
       addEffects: ['CCCCCCCC.GRF'],
       removeEffects: ['AAAAAAAA.GRF'],
+      updateEffects: [],
     });
   });
 
@@ -538,5 +558,19 @@ describe('isMobileDevice', () => {
     expect(isMobileDevice(device(SAFARI, 'MacIntel'))).toBe(false);
     expect(isMobileDevice(device(FIREFOX, 'Win32'))).toBe(false);
     expect(isMobileDevice(device(LINUX, 'Linux x86_64', 0, false))).toBe(false);
+  });
+  it('names iPhones and iPads apart from other phones and computers', () => {
+    expect(isAppleMobileDevice(device(IPHONE, 'iPhone', 5))).toBe(true);
+    expect(isAppleMobileDevice(device(SAFARI, 'MacIntel', 5))).toBe(true);
+    expect(isAppleMobileDevice(device(ANDROID, 'Linux armv8l', 5, true))).toBe(false);
+    expect(isAppleMobileDevice(device(SAFARI, 'MacIntel'))).toBe(false);
+  });
+
+  it('points a phone or a tablet to a computer, and another computer browser to Chrome or Edge', () => {
+    expect(cardHint(device(ANDROID, 'Linux armv8l', 5, true), false)).toBe('computer');
+    expect(cardHint(device(SAFARI, 'MacIntel', 5), false)).toBe('computer');
+    expect(cardHint(device(SAFARI, 'MacIntel'), false)).toBe('browser');
+    expect(cardHint(device(FIREFOX, 'Win32'), false)).toBe('browser');
+    expect(cardHint(device(LINUX, 'Linux x86_64', 0, false), true)).toBeNull();
   });
 });

@@ -68,14 +68,85 @@
 #define CLASSIFY_WIDTH r7
 #define CLASSIFY_CLASS r6
 #define CLASSIFY_RETURN ldm sp, {r4,r5,r6,r7,fp,sp,pc}
+/* RAW development (RawDevelopmentModel) of the photo in playback. The
+   playback metadata (FW_PLAYBACK_METADATA) holds the width and the height of
+   that photo at METADATA_SIZE, as u16 values 4 bytes apart. The development
+   aspect 0 develops the capture aspect that the DNG records, DEVELOP_SQUARE
+   is the native 1:1, and DEVELOP_NATIVE_ASPECTS has a bit for each capture
+   aspect id that the camera develops itself (3:2 and 1:1). The
+   initial-aspect hook gets the model in DEVELOP_MODEL and the recorded
+   capture aspect in DEVELOP_ASPECT. */
+#define METADATA_SIZE 0x30
+/* The playback metadata also holds the time of that photo at METADATA_TIME
+   (build header), in the layout of GrkitDateTime (runtime/sdk/grkit.h).
+   RawDevelopmentModel has its state at DEVELOP_STATE: 0 while no
+   development runs. */
+#define DEVELOP_STATE 4
+#define DEVELOP_SQUARE 2
+/* The value of the Standard Image Control in the development (category 0). */
+#define DEVELOP_STANDARD 1
+#define DEVELOP_NATIVE_ASPECTS 0x9U
+#define DEVELOP_MODEL r4
+#define DEVELOP_ASPECT r2
+/* Resize: the register of the source size at the end of its getter, and the
+   aspect that the resize job gives a 16:9 and a 4:3 source size. */
+#define RESIZE_SIZE r4
+#define RESIZE_JOB_WIDE 1
+#define RESIZE_JOB_NARROW 2
 
 /* The size of SelectMenuController, and the view type and the text view of
    CheckBoxListLineView (runtime/menu_settings.h). */
+/* The string view of the submenu title view (submenu +0x15c): the title
+   setter (2.10: 0x533a2ba0) sets the text ID of this view. */
+#define SUBMENU_TITLE_STRING 0xf0
 #define SELECT_MENU_SIZE 0x1d4U
+/* The fewest row views of a SelectMenuController. Its constructor builds a
+   view for each row of its longest kind (+0x199). The longest native kind has
+   21 rows, and no GRKit hook borrows it (2.10: kind table 0x53b3c6c0). The
+   firmware can build the controller before INSTALL, so a value page on it
+   shows at most these rows. A long value page shows on an own controller
+   (runtime/menu_settings.h). */
+#define SELECT_MENU_ROWS 21U
 #define CHECK_LINE_TYPE 0x2aU
 #define CHECK_TEXT_VIEW 0xf0
 
 /* Visible-area id of a native aspect. GR III offers only 3:2 (0) and 1:1 (3). */
 #define PICTURE_NATIVE_ID(native) ((native)==3 ? 3 : 0)
+
+/* The shooting data of a shot (picture_shot), at these offsets from its shot
+   settings pointer: the data that the camera writes into the EXIF of the
+   picture. The exposure is in APEX values (float): Av, Tv, and Sv, then the
+   exposure compensation. A time or bulb exposure
+   (SHOT_LONG_MODE values SHOT_LONG_FIRST and the next) holds its time in
+   microseconds (u64) at SHOT_TIME; another shot holds it there (u32) when the
+   byte SHOT_TIME_SET is set. The capture time: the year (u16), then the
+   month, the day, a gap, the hour, the minute, and the second. The focal
+   length is a float in mm; times 1.5339 (runtime/picture.c) and the crop
+   factor (float) at SHOT_CROP, it is the focal length of 35 mm film. The flash: on
+   (byte), its mode (byte, 1 or 3 with red-eye reduction), and fired (byte).
+   The program and the metering are bytes of the settings of the shot, with
+   their EXIF codes. */
+#define SHOT_SETTINGS 0x6c4
+#define SHOT_APEX 0xb60
+#define SHOT_TIME 0x918
+#define SHOT_TIME_SET 0x94c
+#define SHOT_LONG_MODE (SHOT_SETTINGS + 0x8b)
+#define SHOT_LONG_FIRST 7
+#define SHOT_TAKEN 0x944
+#define SHOT_FOCAL 0x694
+#define SHOT_CROP 0x7b8
+/* DNGMetaDataWriter::TiffEntryDataSetter: RAW image info and shot metadata. */
+#define DNG_SETTER_INFO 0x7c
+#define DNG_SETTER_SHOT 0x84
+#define SHOT_FLASH_ON 0xde
+#define SHOT_FLASH_MODE 0x760
+#define SHOT_FLASH_FIRED 0x71aa8
+#define SHOT_PROGRAM (SHOT_SETTINGS + 0x8b)
+#define SHOT_PROGRAM_CODES 2,4,3,0,1,1,1,1,1
+#define SHOT_METERING (SHOT_SETTINGS + 0x8e)
+
+/* The native processing applies saturation before the tone curves. GR IV
+   applies it after them, so a native look moves it (runtime/picture.c). */
+#define NATIVE_SATURATION_BEFORE_CURVES 1
 
 #endif

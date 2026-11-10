@@ -10,6 +10,9 @@
 #if !defined(PROCESSING_CONTEXT) || !defined(PROCESSING_OBJECT)
 #error "Define the registers of the parameter build before processing.h"
 #endif
+#if !defined(SETTINGS_SHADING) || !defined(SETTINGS_CLARITY) || !defined(SETTINGS_GRAIN) || !defined(SETTINGS_HDR)
+#error "The build header defines the digital filter values of the shot settings"
+#endif
 
 // Return Z=1 only for an owned record pointer in r0. Preserve all registers.
 // The live view asks several times a frame. The active record, a record
@@ -101,8 +104,9 @@ gamma_hash:
     bx lr
 
 // Store r0, the record of a non-live-view build (0 for native processing),
-// and the posture of the electronic level in the shot ring under the shot
-// settings pointer r7. The live view (context kind 1) stores nothing. A reader
+// the posture of the electronic level, and the effective capture crop in
+// the shot ring under the shot settings pointer r7. The live view (context
+// kind 1) stores nothing. A reader
 // in another task checks the key again after it reads the record, so the key
 // is cleared while the entry changes. FW_LEVEL is a static object whose second
 // word points to the electronic level, or holds 0 before the level exists.
@@ -129,6 +133,13 @@ gamma_hash:
     str r12, [r2, #(GRKIT_SHOT_ENTRY + GRKIT_SHOT_KEY)]
     dmb ish
     str r0, [r2, #(GRKIT_SHOT_ENTRY + GRKIT_SHOT_RECORD)]
+    // Only still captures own the selected crop. RAW development and other
+    // non-live-view tasks keep their recorded geometry instead.
+    ldrb r12, [PROCESSING_CONTEXT, #0x2ac]
+    cmp r12, #0
+    ldreq r12, [r1, #GRKIT_HOST_FRAME_CROP]
+    movne r12, #0
+    str r12, [r2, #(GRKIT_SHOT_ENTRY + GRKIT_SHOT_FRAME_CROP)]
     ldr r1, =FW_LEVEL
     ldr r1, [r1, #4]
     cmp r1, #0
@@ -152,7 +163,22 @@ module_parameters:
     // Without a module that uses CORE.TONE, as after a soft Off of Film Look
     // (runtime/manage.h), the native processing runs.
     ldr r3, [r0, #GRKIT_HOST_CAPABILITIES]
+#ifdef FW_DEVELOP_MODEL
+    // A RAW development applies its own effect (GRKIT_HOST_DEVELOP), not the
+    // selected one: 1 is native processing.
+    ldr r2, =FW_DEVELOP_GUARD
+    ldr r2, [r2]
+    tst r2, #1
+    ldrne r2, =FW_DEVELOP_MODEL
+    ldrbne r2, [r2, #DEVELOP_STATE]
+    cmpne r2, #0
+    ldrne r0, [r0, #GRKIT_HOST_DEVELOP]
+    ldreq r0, [r0, #GRKIT_HOST_ACTIVE]
+    cmp r0, #1
+    moveq r0, #0
+#else
     ldr r0, [r0, #GRKIT_HOST_ACTIVE]
+#endif
     tst r3, #GRKIT_CORE_TONE_BIT
     moveq r0, #0
     // Context 1 is the live view (ImageTuningLiveview); 0 is the still path.
@@ -193,17 +219,83 @@ parameters_fill:
     cmp r2, #9
     subhs r2, r2, #0x10
     bhs parameters_store
-    // A stored byte is (native - 4) mod 9. Another value is neutral.
+    // A stored byte is the change from the default, and a default is
+    // (native - 4) mod 9 (zero without a native look). The native value is
+    // (stored + default + 4) mod 9. A stored byte above 8 counts as 0.
+    add lr, r3, r2
     ldrb r2, [r3, r2]
     cmp r2, #8
     movhi r2, #0
-    cmp r2, #5
-    addlo r2, r2, #4
-    subhs r2, r2, #5
+    ldrb lr, [lr, #(GRKIT_RECORD_FN_DEFAULTS - GRKIT_RECORD_PARAMETERS)]
+    add r2, r2, lr
+    add r2, r2, #4
+    cmp r2, #9
+    subhs r2, r2, #9
+    cmp r2, #9
+    subhs r2, r2, #9
 parameters_store:
     strh r2, [r1], #2
     cmp r1, r0
     bne parameters_fill
+#ifdef DEVELOP_PARAMETERS
+    // A RAW development takes the Fn adjustments of the record from the
+    // Standard parameter set of the development model while the set holds
+    // them, so that the parameter page of the development edits them
+    // (runtime/develop.h). A value above 8 counts as neutral. r1 is at
+    // +0x200, r3 at the adjustments of the record.
+    push {r1, r3}
+    ldr r0, =GRKIT_HEADER_REFERENCE
+    ldr r2, [r0, #GRKIT_HOST_DEVELOP_FILLED]
+    sub r12, r3, #(GRKIT_RECORD_PARAMETERS & ~0xff)
+    sub r12, r12, #(GRKIT_RECORD_PARAMETERS & 0xff)
+    cmp r2, r12
+    bne develop_done
+    ldr r2, =FW_DEVELOP_GUARD
+    ldr r2, [r2]
+    tst r2, #1
+    beq develop_done
+    ldr r2, =FW_DEVELOP_MODEL
+    ldrb r12, [r2, #DEVELOP_STATE]
+    cmp r12, #0
+    beq develop_done
+    add r2, r2, #DEVELOP_PARAMETERS
+    sub r1, r1, #0x20
+    adr r12, develop_slots
+develop_copy:
+    ldrb r0, [r12], #1
+    cmp r0, #0xff
+    beq develop_done
+    ldrb r3, [r12], #1
+    ldrb r0, [r2, r0]
+    cmp r0, #8
+    movhi r0, #4
+    lsl r3, r3, #1
+    strh r0, [r1, r3]
+    b develop_copy
+develop_done:
+    pop {r1, r3}
+#endif
+#ifdef NATIVE_SATURATION_BEFORE_CURVES
+    // A native look applies saturation after the tone curves, as GR IV does:
+    // picture_post applies it, and the native processing gets the neutral
+    // value. 0x20 is GRKIT_FEATURE_NATIVE_LOOK, and r1 is at +0x200.
+    ldr r2, [r3, #(GRKIT_RECORD_FEATURES - GRKIT_RECORD_PARAMETERS)]
+    tst r2, #0x20
+    movne r2, #4
+    strhne r2, [r1, #-0x20]
+#endif
+    // The grain stage of recorded pictures reads Shading, Clarity, grain, and
+    // HDR Tone from the shot settings r7, which the native build writes for
+    // the Image Control type. Write them as its Standard branch does: the
+    // Shading (+0x1f4) and Clarity (+0x1f6) of the record, no grain (CORE.GRAIN
+    // gives its own), and no HDR Tone. Else the native type's values apply.
+    ldrh r2, [r1, #-0xc]
+    ldrh r3, [r1, #-0xa]
+    strb r2, [r7, #SETTINGS_SHADING]
+    strb r3, [r7, #SETTINGS_CLARITY]
+    mov r2, #0
+    strb r2, [r7, #SETTINGS_GRAIN]
+    strb r2, [r7, #SETTINGS_HDR]
 #ifdef PROCESSING_KEPT_BYTE
     pop {r2}
     strb r2, [PROCESSING_OBJECT, #PROCESSING_KEPT_BYTE]
@@ -214,6 +306,14 @@ parameters_store:
 // sharpness, 0, 0, shading, clarity, 0, 0, 0, 0.
 parameters_sources:
     .byte 0, 1, 2, 3, 4, 5, 0x11, 6, 0x10, 0x10, 7, 8, 0x10, 0x10, 0x10, 0x10
+#ifdef DEVELOP_PARAMETERS
+// The parameter kind of each Fn adjustment in the set of the development
+// model, then its halfword at +0x1e0 (parameters_sources), and 0xff.
+develop_slots:
+    .byte 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7
+    .byte PARAMETER_KIND_SHADING, 10, PARAMETER_KIND_CLARITY, 11, 0xff
+    .balign 4
+#endif
 parameters_stock:
     mov r0, #0
     str r0, [r4, #8]

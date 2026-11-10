@@ -15,12 +15,13 @@
 typedef unsigned int u32;
 typedef unsigned short u16;
 typedef unsigned char u8;
+typedef signed int s32;
 
 /* The ABI of this file. The installer loads a module whose major version
    equals that of the core and whose minor version is not larger. A minor
-   version only adds functions and registration types. */
+   version adds functions, registration types, or trailing descriptor fields. */
 #define GRKIT_ABI_MAJOR 2U
-#define GRKIT_ABI_MINOR 1U
+#define GRKIT_ABI_MINOR 6U
 #define GRKIT_ABI (GRKIT_ABI_MAJOR << 16 | GRKIT_ABI_MINOR)
 
 /* ---- overlay.layer -------------------------------------------------------- */
@@ -28,9 +29,11 @@ typedef unsigned char u8;
 /* A 32-bit drawing surface of 720 x 480 pixels over the still live view. A
    pixel holds red in its low byte, then green, blue, and alpha in its high
    byte (bytes R, G, B, A in memory), as the native graphics layer reads it.
-   `area` is the capture area that the surface shows: 0 for the full 3:2
-   area, else the ratio value of the crop (CORE.ASPECT). `box` is its photo
-   area {left, top, right, bottom}. */
+   `area` identifies the displayed ratio: 0 for 3:2, otherwise a CORE.ASPECT
+   ratio value. `box` is {left, top, right, bottom}. Each layer receives the
+   framing area: the crop, or the composition frame in guides-only mode.
+   Without one, a layer bound to CORE.ASPECT receives area 0 and other layers
+   receive the native photo area. ADJ previews supply the highlighted ratio. */
 #ifndef GRKIT_CORE_SURFACE
 typedef struct {
     u32 data;
@@ -48,6 +51,14 @@ typedef struct {
 /* The pixel at (x, y). */
 #define SURFACE_PIXEL(s,x,y) (GRKIT_PIXELS((s)->data+((y)*(s)->stride+(x))*4)[0])
 
+#define GRKIT_CONDITION_EQUALS 1U
+#define GRKIT_CONDITION_NOT_EQUALS 2U
+typedef struct {
+    u32 setting;
+    u32 comparison;
+    u32 value;
+} GrkitCondition;
+
 /* A drawing layer. The core calls `paint` for each draw of the live view
    with the value of `setting` (see GRKIT_USE), and does not call
    it while the value is 0, so a layer that is off costs nothing. With
@@ -64,6 +75,10 @@ typedef struct {
     void (*paint)(const Surface *s, u32 value);
     u32 setting;
     u32 order;
+    /* Since ABI 2.3. All conditions must match before this layer is active.
+       Zero conditions and a null pointer keep the ABI 2.0 behavior. */
+    u32 condition_count;
+    const GrkitCondition *conditions;
 } GrkitLayer;
 
 /* Live-view labels of the core (overlay_label): the GRKit cue, the name of
@@ -72,6 +87,8 @@ typedef struct {
 #define LABEL_GRKIT 0U
 #define LABEL_RATIO(area) (area)
 #define LABEL_DATE 8U
+/* The Date Imprint formats, YMD to DMY HM, follow DATE (since ABI 2.3). */
+#define LABEL_DATE_FORMAT(style) (LABEL_DATE+(style))
 /* The top of a label in the second row of the native live-view text, and
    the left edge of a label that lines up with the native icons. A capture
    area label is at most 80 pixels wide, so a second label of the row starts
@@ -89,7 +106,7 @@ void overlay_label(const Surface *s, u32 label, u32 left, u32 top);
 
    The core stores the value of each setting, and the resident loader saves
    the values of settings with GRKIT_SETTING_SAVED in the state file. A value
-   is 0 to values - 1, and 0 until the user changes it. INSTALL restores
+   is 0 to values - 1, initially default_value (0 for older modules). INSTALL restores
    the saved values before the core starts, and the user can change a value
    at any time, so read a setting each time that you use it, and do not keep
    a copy. A handle names one
@@ -107,14 +124,22 @@ void overlay_label(const Surface *s, u32 label, u32 left, u32 top);
                   2 medium, 3 strong, 4 extra strong.
      CORE.GRAIN_SIZE  4 values: the grain size, 0 Auto (by the ISO of the
                   shot), 1 small, 2 medium, 3 large.
-     CORE.ASPECT  8 values: the aspect of still pictures, 0 native 3:2, 1
+     CORE.ASPECT  8 values: the composition ratio, 0 Off, 1
                   XPan 65:24, 2 16:9, 3 4:3, 4 2.35:1, 5 1:1, 6 5:4, 7 7:6. Each
                   camera offers some of them, and a choice page shows only
-                  those. A ratio that the camera has natively sets the native
-                  aspect. The core crops the others (Surface.area). */
+                  those. Selecting a nonzero ratio sets native 3:2 in both
+                  modes. Crop mode crops it; guides-only displays the frame
+                  without that crop. Off preserves the current native aspect.
+     CORE.ASPECT_MODE  2 values: 0 Crop (default), 1 Guides Only. A module
+                  without this capability retains crop behavior. Changing
+                  only this mode preserves the native aspect. */
 
 #define GRKIT_SETTING_PUBLIC 1U /* other modules can use it */
 #define GRKIT_SETTING_SAVED 2U  /* the value survives a restart */
+/* Since ABI 2.4: the rows of the setting show only on a camera with a color
+   sensor. On GR IV Monochrome the installer leaves them out of each page, and
+   the setting keeps its value. It cannot be the first row of a page. */
+#define GRKIT_SETTING_COLOR_ONLY 4U
 /* The handle of an optional used setting that no module has. */
 #define GRKIT_NO_SETTING 0xffffffffU
 /* The setting of a page or a layer: n for setting n of
@@ -130,6 +155,8 @@ typedef struct {
     /* 1 to 65536. */
     u32 values;
     u32 flags;
+    /* Used when no valid saved value exists. Less than values. Since ABI 2.1. */
+    u32 default_value;
 } GrkitSetting;
 
 /* What the installer gives this module (the import grkit_self). */
@@ -146,7 +173,7 @@ extern const GrkitContext grkit_self;
    the stable name of an effect (effects/README.md); its value can change at
    each start, so find it again before each use and never save it. Pass the
    value to setting_set of a used CORE.TONE, which ignores an effect that the
-   core does not offer. Since ABI 2.1. */
+   core does not offer. Since ABI 2.6, of Emulsion. */
 u32 effect_find(const char *id);
 
 /* The value of a setting, or 0 for GRKIT_NO_SETTING. */
@@ -164,6 +191,46 @@ static inline const GrkitContext *grkit_context(void)
 }
 #define GRKIT_SETTING(n) (grkit_context()->settings + (n))
 #define GRKIT_USED(n) (grkit_context()->uses[n])
+
+/* ---- viewfinder.indicator ------------------------------------------------- */
+
+/* Icons are shared by viewfinder indicators and ADJ group children. TILE
+   resolves to first_tile + the setting value, or first_tile with NO_SETTING.
+   TONE resolves the committed CORE.TONE effect icon; first_tile is zero.
+   Setting references use the same local/GRKIT_USE form as layers. */
+#define GRKIT_ICON_TILE 1U
+#define GRKIT_ICON_TONE 2U
+/* Since ABI 2.3, for a status_row indicator only: core live-view label
+   first_tile + n for setting value n, or first_tile without a setting. The
+   labels are the Framing ratios (1 to 7, by CORE.ASPECT), DATE (8), and the
+   Date Imprint formats (9 to 13, by Date Imprint STYLE 1 to 5). */
+#define GRKIT_ICON_LABEL 3U
+typedef struct {
+    u32 size;
+    u32 kind;
+    u32 setting;
+    u32 first_tile;
+} GrkitIcon;
+
+#define GRKIT_INDICATOR_NATIVE_SLOT 1U
+#define GRKIT_INDICATOR_STATUS_ROW 2U
+#define GRKIT_SLOT_IMAGE_CONTROL 1U
+#define GRKIT_INDICATOR_CONDITIONS_MAX 4U
+/* Since ABI 2.2. All conditions must match. A module's soft Off and the
+   GRKit switch also hide its indicators. STATUS_ROW has slot 0, shows only
+   on the full-information still viewfinder, and never previews ADJ values.
+   NATIVE_SLOT replaces the still Image Control icon while active; otherwise
+   the core retains the current native icon. Neither affects photo playback.
+   At most six STATUS_ROW indicators fit; IMAGE_CONTROL has one registrant.
+   The core owns placement, redraw, and removal of the previous drawing. */
+typedef struct {
+    u32 size;
+    u32 placement;
+    u32 slot;
+    u32 condition_count;
+    const GrkitCondition *conditions;
+    const GrkitIcon *icon;
+} GrkitIndicator;
 
 /* ---- menu.page ------------------------------------------------------------ */
 
@@ -188,8 +255,9 @@ typedef struct {
 
 /* A choice page: one row for each value of `setting` (see GRKIT_USE),
    `rows` rows. OK on a row sets the value. The root row shows the summary and
-   the tile of the value; row n shows tile n, or the Off icon for row 0 with
-   GRKIT_CHOICE_OFF_ROW. Each text is one UTF-16 string for each language.
+   the tile of the value; row n shows tile n. Row 0 shows the core Off icon
+   with GRKIT_CHOICE_OFF_ROW, else the page `icon` if there is one.
+   Each text is one UTF-16 string for each language.
    The installer rejects the module if `rows` is not the number of values.
 
    A page of a setting of this module can also have 1 to GRKIT_SETTING_ROWS
@@ -205,6 +273,18 @@ typedef struct {
    core gives its rows, the effects, with their names, icons, live-view
    preview, and Fn adjustments. The page shows only with effects. */
 #define GRKIT_PAGE_CHOICE 1U
+/* ADJ opens the native settings directly. The title and tile 0 identify
+   the entry. No summaries or labels are needed. The first settings row
+   supplies setting and rows. MENU_ONLY hides a child from the ADJ root.
+   Since ABI 2.1. */
+#define GRKIT_PAGE_SETTINGS 2U
+/* An ADJ icon list: OK toggles a child's first setting (0 Off, 1 On),
+   and Fn opens its native settings. Tile 0 is the root; child n uses tile
+   n + 1. Children are registered MENU_ONLY pages whose first setting has
+   two values. */
+#define GRKIT_PAGE_GROUP 3U
+#define GRKIT_PAGE_MENU_ONLY 8U
+#define GRKIT_PAGE_CHILDREN 4U
 #define GRKIT_CHOICE_OFF_ROW 1U
 #define GRKIT_CHOICE_CORE_ROWS 2U
 /* The settings page of the module in the GRKit section of MENU has an
@@ -215,7 +295,7 @@ typedef struct {
    values. */
 #define GRKIT_CHOICE_OPTIONS 4U
 #define GRKIT_SETTING_ROWS 5U
-typedef struct {
+typedef struct GrkitPage {
     u32 size;
     u32 kind;
     u32 setting;
@@ -226,6 +306,19 @@ typedef struct {
     u32 rows;
     u32 setting_rows;            /* 0 to GRKIT_SETTING_ROWS */
     const GrkitSettingRow *settings;
+    /* Since ABI 2.1; read only for GROUP. Older 40-byte pages remain valid. */
+    const struct GrkitPage *const *children;
+    /* Since ABI 2.2; optional. For a GROUP child, its icon in the group
+       and in its value list, also while its first setting is Off. For a
+       CHOICE page without GRKIT_CHOICE_OFF_ROW, the icon of row 0. */
+    const GrkitIcon *icon;
+    /* Since ABI 2.5; optional, CHOICE only. Fn on the row of value
+       `fn_value` in ADJ sets `fn_setting` (see GRKIT_USE) to its next value,
+       and to 0 after the last one, and the live view shows the change at
+       once. Fn on the other rows opens the settings as before. 0 for none:
+       value 0 is Off. */
+    u32 fn_value;
+    u32 fn_setting;
 } GrkitPage;
 
 /* ---- picture.plane -------------------------------------------------------- */
@@ -240,7 +333,9 @@ typedef struct { u32 y, c, width, height, pitch, half, left, top, right, bottom;
    `scratch` holds GRKIT_PLANE_SCRATCH bytes for this call. The planes keep
    the landscape layout of the sensor in each posture of the camera; `turns`
    is the quarter turns clockwise that show the picture upright, as its EXIF
-   Orientation does: 0 (Orientation 1), 1 (6), 2 (3), or 3 (8). */
+   Orientation does: 0 (Orientation 1), 1 (6), 2 (3), or 3 (8). The core
+   reads `reserved_shot` for picture_shot (since ABI 2.1); a module does
+   not use it, as it does not use `reserved`. */
 typedef struct {
     Plane planes[4];
     u32 count;
@@ -248,6 +343,7 @@ typedef struct {
     u32 mono;
     u8 *scratch;
     u32 turns;
+    u32 reserved_shot;
 } PictureSet;
 /* The address of the chroma row of luma row y. */
 static inline u32 chroma_row(const Plane *p, u32 y) { return p->c + (p->half ? y >> 1 : y) * p->pitch; }
@@ -278,6 +374,52 @@ void local_time(GrkitDateTime *out);
 /* n / d, rounded down, for d > 0. The core exports no compiler helper for
    division, so a module divides by a variable only through this function. */
 u32 divide(u32 n, u32 d);
+/* The white of the effect of a recorded picture: the R, G, B levels (0-255)
+   that its brightest light reaches, input 255 of the effect's curves after
+   its post matrix. It is 255 each without an effect. A color effect ends
+   below 255, so a filter that looks for clipped light compares levels with
+   this white. The Fn adjustments are not in it. Since ABI 2.1. */
+void picture_white(const PictureSet *set, u8 white[3]);
+/* The shooting data of a recorded picture, as the camera records it in the
+   EXIF of the picture. Set `size` to sizeof(GrkitShot) before the call:
+   picture_shot fills the fields of that size that the core knows, sets
+   `size` to the bytes it filled, and sets `known` to the GRKIT_SHOT_* bits of
+   the fields that hold a value. A `size` below 8 (no room for `size` and
+   `known`) gets nothing. A later ABI adds fields at the end, so a module
+   built with this header keeps working. Since ABI 2.1.
+   The exposure is in APEX values in 1/256 EV, as the camera computed them.
+   f_number, iso, and exposure_us come from them; the EXIF shows the
+   nominal value of the nearest third of a stop (f/5.6 for f/5.66, ISO 2500
+   for 2780). In a RAW development the data are those of the DNG.
+   scene_ev is the exposure value at ISO 100, the light of the scene: about
+   12 to 15 in sunlight, 8 to 11 indoors or at dusk, and 3 to 7 on a lit
+   street at night. */
+#define GRKIT_SHOT_EXPOSURE 0x01U     /* av to iso */
+#define GRKIT_SHOT_COMPENSATION 0x02U /* compensation */
+#define GRKIT_SHOT_FOCAL 0x04U        /* focal, focal_35mm */
+#define GRKIT_SHOT_TAKEN 0x08U        /* taken */
+#define GRKIT_SHOT_FLASH 0x10U        /* flash */
+#define GRKIT_SHOT_PROGRAM 0x20U      /* program */
+#define GRKIT_SHOT_METERING 0x40U     /* metering */
+typedef struct {
+    u32 size;
+    u32 known;
+    s32 av;           /* Av: the f-number is 2^(Av / 2) */
+    s32 tv;           /* Tv: the exposure time is 2^-Tv s */
+    s32 sv;           /* Sv: the ISO speed is 3.125 x 2^Sv (ISO 100 is 5) */
+    s32 scene_ev;     /* Av + Tv - Sv + 5 */
+    s32 compensation; /* the exposure compensation, 1/256 EV */
+    u32 exposure_us;  /* the exposure time in microseconds, also of a bulb or time exposure */
+    u16 f_number;     /* times 10 */
+    u16 iso;
+    u16 focal;        /* the focal length in 1/10 mm */
+    u16 focal_35mm;   /* in mm, as on 35 mm film */
+    u8 program;       /* EXIF ExposureProgram */
+    u8 metering;      /* EXIF MeteringMode */
+    u16 flash;        /* EXIF Flash */
+    GrkitDateTime taken; /* the capture time, as EXIF DateTimeOriginal */
+} GrkitShot;
+void picture_shot(const PictureSet *set, GrkitShot *shot);
 
 /* ---- events --------------------------------------------------------------
 
@@ -362,6 +504,7 @@ u32 ui_open_native(u32 screen, void (*back)(u32 arg), u32 arg);
 #define GRKIT_POINT_MENU_PAGE 2U
 #define GRKIT_POINT_PICTURE_PLANE 3U
 #define GRKIT_POINT_EVENT 4U
+#define GRKIT_POINT_VIEWFINDER_INDICATOR 5U
 
 typedef struct {
     u32 point;
@@ -379,10 +522,22 @@ typedef struct {
        A name that starts with '?' is optional. Only public settings. */
     const char *const *uses;
     u32 use_count;
-    /* The artwork tiles of the module, GRKIT_TILE_BYTES each. */
+    /* The artwork tiles of the module, GRKIT_TILE_BYTES each. Since ABI 2.3,
+       `grkit module build` puts them after the module file, where INSTALL
+       copies them to the icons without loading them as code: then `tiles`
+       is 0 and `tile_count` gives their number. Tiles in the code still
+       work. */
     const u8 *tiles;
     u32 tile_count;
+    /* Since ABI 2.4: GRKIT_MODULE_COLOR_ONLY, or 0. A 40-byte descriptor of
+       an earlier ABI has no flags. */
+    u32 flags;
 } GrkitModule;
+
+/* The module loads only on a camera with a color sensor. On GR IV
+   Monochrome the installer does not load it, and the GRKit section of MENU
+   does not list it. */
+#define GRKIT_MODULE_COLOR_ONLY 1U
 
 /* The descriptor of this module. */
 extern const GrkitModule grkit_module;

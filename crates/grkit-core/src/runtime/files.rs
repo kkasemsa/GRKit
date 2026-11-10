@@ -2,11 +2,13 @@
 //! package scripts, the core files, and the files that turn SD scripts on or
 //! off.
 
-use super::loader::{core_path, loader_for};
+use super::fastboot::{fast_files, install_file};
+use super::loader::{core_path, loader_with, resident};
 use super::ICON_STRIDE;
 use crate::camera::Camera;
 use crate::card::{
-    INSTALL_FILE, LINUX_DATA_DIRECTORY, LINUX_DIRECTORY, LOADER_FILE, PACKAGE_FOLDER, SCAN_FILE,
+    INSTALL_FILE, LINUX_DATA_DIRECTORY, LINUX_DIRECTORY, LOADER_FILE, PACKAGE_FOLDER,
+    RESIDENT_FILE, SCAN_FILE,
 };
 use crate::Files;
 
@@ -38,6 +40,12 @@ pub fn runtime_files(binary: &[u8]) -> Files {
 /// The runtime files of a target with `icon_stride`-byte icon slots.
 pub fn runtime_files_for(binary: &[u8], icon_stride: usize) -> Files {
     package_runtime_files(&[binary], icon_stride)
+}
+
+/// `runtime_files_for`, with the fast-boot files of `fast`
+/// (`package_runtime_files_with`).
+pub fn runtime_files_with(binary: &[u8], fast: &Files, icon_stride: usize) -> Files {
+    package_runtime_files_with(&[binary], fast, icon_stride)
 }
 
 /// The exit statuses of a core file that the package scripts test
@@ -101,6 +109,19 @@ pub fn core_path_of(index: usize, count: usize) -> String {
 /// Both scripts add their start and the status of the installer to the boot
 /// log (`BOOT_LOG`).
 pub fn package_runtime_files(binaries: &[&[u8]], icon_stride: usize) -> Files {
+    package_runtime_files_with(binaries, &Files::new(), icon_stride)
+}
+
+/// `package_runtime_files`, with the fast-boot files of `fast` by their path
+/// (`runtime::fastboot`). The loader runs each of them on its firmware
+/// release, and the install file of each comes with it. `fast` holds no
+/// other file, and each passed `runtime::check_fast_file`.
+pub fn package_runtime_files_with(binaries: &[&[u8]], fast: &Files, icon_stride: usize) -> Files {
+    let releases: Vec<_> = fast_files(fast)
+        .into_iter()
+        .map(|(release, _)| release)
+        .collect();
+    assert_eq!(releases.len(), fast.len(), "only fast-boot files");
     let count = binaries.len();
     assert!((1..=MAX_CORE_FILES).contains(&count));
     let target = core_path("LOADER.TTL");
@@ -180,12 +201,18 @@ pub fn package_runtime_files(binaries: &[&[u8]], icon_stride: usize) -> Files {
     };
     let mut files = Files::from([
         ("SCRIPT/STARTUP.TTL".into(), startup.into_bytes()),
-        (LOADER_FILE.into(), loader_for(icon_stride)),
+        (LOADER_FILE.into(), loader_with(icon_stride, &releases)),
+        (RESIDENT_FILE.into(), resident()),
         (SCAN_FILE.into(), wrapper(scan, "scan", &start)),
         (INSTALL_FILE.into(), wrapper(install, "install", "")),
     ]);
     for (index, binary) in binaries.iter().enumerate() {
         files.insert(core_path_of(index, count), binary.to_vec());
+    }
+    for (release, bytes) in fast_files(fast) {
+        files.insert(release.path(), bytes.clone());
+        let install = install_file(bytes).expect("a checked fast-boot file");
+        files.insert(release.install_path(), install);
     }
     files
 }

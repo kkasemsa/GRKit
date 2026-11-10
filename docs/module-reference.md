@@ -39,14 +39,16 @@ The manifest is TOML. An unknown key is an error.
 | `sources` | array of strings | `[]` | The C source files, relative to the manifest. |
 | `tiles` | array of strings | `[]` | The tile files, relative to the manifest. Each is a 40 x 40 PNG. At most 64. |
 | `uses` | array of strings | `[]` | The settings of other modules or of the core that the module uses: `MODULE.KEY`, or `?MODULE.KEY` for an optional one. At most 8. See [Used settings](#used-settings). |
+| `color_only` | boolean | `false` | The module loads only on a camera with a color sensor. GR IV Monochrome does not load it, and the GRKit section of MENU does not list it. Needs ABI 2.4. |
 | `settings` | array of tables | `[]` | The settings of the module. At most 16. |
 | `page` | table | none | The menu page. A module has at most one. |
 | `layers` | array of tables | `[]` | The live-view layers. |
+| `indicators` | array of tables | `[]` | The viewfinder status icons. |
 | `filters` | array of tables | `[]` | The plane filters. |
 
-A manifest gives at least one page, layer, or filter. Each page, layer, and filter is one registration, and a module has at most 16 registrations.
+A manifest gives at least one page, layer, indicator, filter, or event subscriber. Each entry is one registration, and a module has at most 16 registrations.
 
-A setting reference in `page`, `layers`, or `filters` is a key of `settings`, or a name of `uses` without its `?`.
+A setting reference is a key of `settings`, or a name of `uses` without its `?`.
 
 ### settings
 
@@ -54,19 +56,62 @@ A setting reference in `page`, `layers`, or `filters` is a key of `settings`, or
 | --- | --- | --- | --- |
 | `key` | string | required | 1 to 15 characters `A`-`Z`, `0`-`9`, or `_`. Unique in the module. The full name is `<id>.<key>`. |
 | `values` | integer | required | The number of values, 1 to 65536. The values are 0 to `values` - 1. |
-| `saved` | boolean | `false` | The state file keeps the value. |
+| `default` | integer | `0` | The initial value, from 0 to `values` - 1. Used when no valid saved value exists. |
+| `saved` | boolean | `false` | The state file keeps the value, including 0. |
 | `public` | boolean | `false` | Other modules can use the setting. |
+| `color_only` | boolean | `false` | The rows of the setting show only on a camera with a color sensor. On GR IV Monochrome, the installer leaves them out of each page, and the setting keeps its value. It cannot be the first row of a page or of a group child. Needs ABI 2.4. |
 
 ### page
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `setting` | string | required | The setting of the page: a setting reference. |
-| `off_row` | boolean | `false` | Row 0 shows the Off icon instead of tile 0. |
-| `settings` | array of strings | `[]` | The rows of a native settings page: the page setting, then keys of `settings` or names of `uses`. Give 0 to 5 keys (`GRKIT_SETTING_ROWS`). The row of an optional used setting that no module has is left out. With one key, the page setting alone, the row gets a label of its own, and Fn opens no settings page. |
+| `kind` | string | `"choice"` | `"choice"` lists setting values. `"settings"` opens native settings directly. `"group"` lists children, each with its own list of values. |
+| `setting` | string | required for `choice` | The setting of a choice page. Omit it for `settings` and `group`. |
+| `off_row` | boolean | `false` | Row 0 shows the core Off icon instead of the Off icon of the page. |
+| `settings` | array of strings | `[]` | Up to 5 native settings rows (`GRKIT_SETTING_ROWS`). A choice page starts with its page setting. A settings page needs at least one row. |
 | `options` | boolean | `false` | The settings page of the module in the GRKit section of MENU has an Options row, which turns each value of the page on or off in ADJ, or each effect for a page of `CORE.TONE` (`GRKIT_CHOICE_OPTIONS`). A page of a setting with options needs `off_row` and at most 16 values. Without room on the settings page, its first rows leave it. |
+| `children` | array of tables | `[]` | A group page has 1 to 4 children, in display order. Other page kinds have none. |
+| `off_icon` | table | none | Optional [icon source](#icon-sources) of row 0 (Off) of a choice page without `off_row`. Without it, row 0 shows tile 0. The root row shows tile 0 while the setting is 0. Other page kinds have none. |
+| `fn_cycle` | table | none | `{ value = n, setting = "KEY" }`: in ADJ, Fn on the row of value `n` sets the setting to its next value, and to 0 after the last one. ADJ stays on the row, and the live view shows the change at once. Fn on the other rows opens the settings as before. `n` is a value of the page other than Off. The setting is a setting reference other than the page setting, with at least 2 values. Only a choice page whose rows come from the module has it. Needs ABI 2.5. |
 
-A page of `CORE.TONE` has no `off_row` and no `settings`, and it needs no tiles. Its text has only `title`.
+A `settings` page needs a module tile and has no `setting`, `off_row`, or `options`. Its text gives `title` and `settings.<KEY>.label` and `values` for each row. It has no `rows` or `summaries`. The first row must be available for the page to load. Later optional rows are omitted when unavailable.
+
+```toml
+[page]
+kind = "settings"
+settings = ["BLOOM", "HALATION"]
+```
+
+A `group` page has no `setting`, `settings`, `off_row`, or `options`. Each `[[page.children]]` table has these fields:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `key` | string | A unique key with 1 to 15 characters `A`-`Z`, `0`-`9`, or `_`. It identifies the child title in the text files. |
+| `settings` | array of strings | The child's 1 to 5 native settings rows. The first setting has 2 to 8 values: 0 is Off, and the other values turn the child on. It must be available and cannot be an optional use. |
+| `icon` | table | Optional [icon source](#icon-sources). Without it, child n uses tile n + 1. |
+
+This example uses two settings declared elsewhere in the manifest, each with the values Off, Weak, Medium, and Strong:
+
+```toml
+[page]
+kind = "group"
+
+[[page.children]]
+key = "BLOOM"
+settings = ["BLOOM"]
+icon = { setting = "BLOOM", first_tile = 1 }
+
+[[page.children]]
+key = "HALATION"
+settings = ["HALATION"]
+icon = { setting = "HALATION", first_tile = 5 }
+```
+
+The text files give `title`, `children.<KEY>.title`, and the label and values of each setting. A group has no choice `rows` or `summaries`. Tile 0 identifies the group. Without an explicit `icon`, tiles 1 to the child count identify its children in declaration order.
+
+The generator registers the group first, then its child settings pages. Each child has `GRKIT_PAGE_MENU_ONLY`, so only the group appears in the ADJ root. A group and its children consume one page slot each from the shared limit of 10 loaded pages.
+
+A page of `CORE.TONE` has no `off_row` and no `settings`, and it needs no tiles. Its text has only `title`. If tile 0 exists, the root row shows that tile while the setting is Off. Otherwise, the root row shows the Off icon.
 
 ### layers
 
@@ -78,8 +123,64 @@ A page of `CORE.TONE` has no `off_row` and no `settings`, and it needs no tiles.
 | `follow_disp` | boolean | `false` | The layer is off while DISP hides the native information. |
 | `full_disp` | boolean | `false` | The layer is on only while DISP shows the full information. |
 | `live_only` | boolean | `false` | The layer does not paint on the ADJ canvas. |
+| `enabled` | condition or `{ all = [...] }` | none | Optional setting conditions. All must match before the core treats the layer as active. |
 
 A layer has `follow_disp` or `full_disp`, not both.
+The optional `enabled` field uses the same conditions as an indicator, with 1 to 4 conditions.
+An omitted `enabled` field adds no condition.
+The setting value, display flags, and conditions must all permit the layer to draw.
+For example, `enabled = { setting = "DISP", equals = 0 }` selects a layer when `DISP` is zero.
+
+On the ADJ canvas, a condition on the previewed setting reads the highlighted value.
+Other conditions read committed values.
+
+### indicators
+
+An indicator supplies a status icon without a drawing callback. The viewfinder service owns its placement, display policy, and refresh.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `id` | string | required | A unique identifier within this module: 1 to 32 lowercase letters, digits, or underscores. |
+| `placement` | string | required | `native_slot` or `status_row`. |
+| `slot` | string | none | Required for `native_slot`: `image_control`. Omit it for `status_row`. |
+| `enabled` | table | required | A setting condition, or `all = [condition, ...]` with 1 to 4 conditions. |
+| `icon` | table | required | An [icon source](#icon-sources). |
+
+A condition has `setting` and exactly one of `equals` or `not_equals`. All conditions must hold for the indicator to show. The core also hides indicators of stopped modules or when GRKit is off.
+
+```toml
+[[indicators]]
+id = "framing"
+placement = "status_row"
+enabled = { all = [{ setting = "CORE.ASPECT", not_equals = 0 }, { setting = "LABEL", equals = 0 }] }
+icon = { setting = "CORE.ASPECT", label = "ratio" }
+```
+
+The status row uses the module order, then declaration order. Disabled icons leave no gap. It supports at most 6 registered icons across loaded modules. It shows only on the full-information still viewfinder and uses screen coordinates independently of the current photo area.
+
+The `image_control` slot supports one registered indicator. It returns the current native icon when the indicator is disabled or cannot resolve its icon. Its visibility follows the native still-viewfinder position. It does not change the camera's Image Control setting or playback icons.
+
+Indicators use committed settings, not ADJ highlight previews. Their icons indicate enabled settings, including effects without a live preview. Registration conflicts and capacity failures are reported during installation.
+
+### Icon sources
+
+Indicators, group children, and the `off_icon` of a choice page accept the same `icon` table:
+
+| Form | Meaning |
+| --- | --- |
+| `{ tile = 2 }` | The fixed module tile at index 2. |
+| `{ setting = "STYLE" }` | Module tile n for setting value n. |
+| `{ setting = "STRENGTH", first_tile = 1 }` | Module tile 1 + n for setting value n. |
+| `{ setting = "CORE.TONE" }` | The core icon of the committed Film Look. |
+| `{ label = "DATE" }` | A core live-view label, by its text. Status-row indicators only. |
+| `{ setting = "STYLE", label = "DATE" }` | The core label n after `DATE` for setting value n. Status-row indicators only. |
+| `{ setting = "CORE.ASPECT", label = "ratio" }` | The core label of the committed Framing ratio. Status-row indicators only. |
+
+A core label is the native live-view text, as in the focus distance `2.5m`. The labels are, in order, `XPan`, `16:9`, `4:3`, `2.35`, `1:1`, `5:4`, `7:6`, `DATE`, `YMD`, `YMD HM`, `MDY`, `DMY`, and `DMY HM`. `YMD`, `MDY`, and `DMY` are as high as a ratio. `YMD HM` and `DMY HM` show `HM` on a second line and are as high as a status-row icon. With a setting, every value needs a label at or after the named one. A label takes its own width in the status row; an icon takes 44 pixels. The row ends before x = 580, and before the load cue while it shows. An indicator that does not fit is not shown.
+
+Do not combine `tile` with `setting` or `first_tile`. A tile mapping must cover every value of its setting. `CORE.TONE` uses the core's effect icons and has no tile offset.
+
+An icon source does not decide whether a feature is enabled. A viewfinder indicator uses its `enabled` condition for that. For example, Glow's Bloom indicator hides while Bloom is Off, and its ADJ child shows the Off tile.
 
 ### filters
 
@@ -109,16 +210,32 @@ A module with a page has one text file for each menu language: `text/en.toml`, `
 | `summaries` | array of strings | Optional. The value in the root row, one for each value. Without it, the root row shows the label. |
 | `settings.<KEY>.label` | string | The label of a row of the native settings page. |
 | `settings.<KEY>.values` | array of strings | The text of each value of that row. The row of the page setting can omit it and use `rows`. |
+| `children.<KEY>.title` | string | The title of a group child. The ADJ group and the module page in MENU use this title for the child row. |
 
-The root row shows `<title><separator><summary>`. Each text, and the text of the root row, has at most 64 UTF-16 units. For a page of a used setting, the build takes the number of values from `rows` in `text/en.toml`, and the installer checks it against the setting.
+A choice root row shows `<title><separator><summary>`. A group root row shows `<title><separator>` and the titles of the children that are on, joined by a slash, or Off. A settings root row shows only the title. Each text, and the text of the root row, has at most 64 UTF-16 units. For a choice page of a used setting, the build counts `rows` in `text/en.toml`. The installer checks this count against the setting.
+
+For example, these tables name a group child and its setting:
+
+```toml
+[children.BLOOM]
+title = "Bloom"
+
+[settings.BLOOM]
+label = "Strength"
+values = ["Off", "Weak", "Medium", "Strong"]
+```
 
 ## Tiles
 
-A tile is a 40 x 40 PNG file. Tile n shows value n of the page setting, on its row and on the root row, and tile 0 is also the module tile. A choice page needs at least one tile for each value.
+Built-in artwork follows the [icon design rules](icon-guidelines.md).
+
+A tile is a 40 x 40 PNG file. A choice page needs at least one tile for each setting value. Tile n shows value n on the choice row and on the root row. Tile 0 also identifies the module. An `off_icon` replaces tile 0 on the Off row. A settings page needs only tile 0. A group page needs tile 0 and its child icons, including every tile named by an explicit icon source. A child icon of its first setting needs a tile for Off, value 0.
+
+The build stores the tiles after the module file, not in its code. INSTALL copies them to icon slots after the effect icons, so they take no module code memory and do not count toward the 65536-byte code limit. All loaded modules have at most 128 tiles together.
 
 ## Settings
 
-The core stores the value of each setting, 0 to `values` - 1, and 0 until the user or a module changes it. A module reads and changes a value only through `setting_get` and `setting_set`. Read a setting each time that you use it, because the menu and other modules can change it.
+The core stores each setting from 0 to `values` - 1. Without a valid saved value, a setting starts at `default`. A module reads and changes a value only through `setting_get` and `setting_set`. Read a setting each time that you use it, because the menu and other modules can change it.
 
 ### Handles
 
@@ -136,7 +253,7 @@ A function names a setting by its handle, a `u32`.
 
 The state file keeps a saved setting under a number that the core computes from its full name, `MODULE.KEY`:
 
-- A new ID or a new key starts the setting at 0 again.
+- A new ID or key starts at `default` (0 if omitted). A valid saved value overrides it, including 0.
 - If a new version has fewer values, a saved value out of the range is not restored.
 - INSTALL restores a saved value only when its module loads. If the module is Off or missing, the file keeps the value.
 - The resident loader writes the file 2 to 4 s after the last change.
@@ -156,12 +273,16 @@ The capabilities are public settings of the core. A module uses one by its name 
 | Name | Values | Meaning |
 | --- | --- | --- |
 | `CORE.TONE` | 0 Off, then n + 1 for installed effect n | The effect of still pictures and the live view. The core installs the effects only when a loaded module uses `CORE.TONE`. |
-| `CORE.ASPECT` | 8: 0 native 3:2, 1 XPan 65:24, 2 16:9, 3 4:3, 4 2.35:1, 5 1:1, 6 5:4, 7 7:6 | The aspect of still pictures. |
+| `CORE.ASPECT` | 8: 0 Off, 1 XPan 65:24, 2 16:9, 3 4:3, 4 2.35:1, 5 1:1, 6 5:4, 7 7:6 | The selected crop or composition ratio, according to `CORE.ASPECT_MODE`. |
+| `CORE.ASPECT_MODE` | 2: 0 Crop, 1 Guides Only | Whether the selected ratio crops JPEG photos or only marks composition in the live view. The default is Crop. |
 | `CORE.GRAIN` | 5: 0 Off, 1 weak, 2 medium, 3 strong, 4 extra strong | The grain of recorded pictures, in the native grain stage. The live view and DNG files have no grain. |
 | `CORE.GRAIN_SIZE` | 4: 0 Auto, 1 small, 2 medium, 3 large | The grain size of recorded pictures. Auto follows the ISO of the shot. |
 
 - `CORE.TONE`: a page gives only its title, and the core gives the rows: the effects, their icons, the preview, and the Fn adjustments. The value of an effect is valid only during one start, because the effects and their order can change. Keep no value across a restart.
-- `CORE.ASPECT`: a page shows only the ratios that the camera offers. The core crops each ratio from the native 3:2, also a ratio that the camera has natively. A layer gets the crop in `Surface.area` and `Surface.box`. `setting_set` with a ratio that the camera does not offer does nothing.
+- `CORE.ASPECT`: a page shows only the ratios that the camera offers. `setting_set` with an unsupported ratio does nothing. Selecting a nonzero ratio sets the native aspect to 3:2 in both modes. Crop mode crops JPEG photos to that ratio. Guides Only displays the composition frame without applying that crop. Off clears the selected ratio and preserves the current native aspect.
+- `CORE.ASPECT_MODE`: Crop changes JPEG dimensions. Guides Only shows the selected ratio in the native 3:2 live view without setting a recorded crop. A later change to another native aspect hides this composition frame. Changing only the mode preserves the native aspect and the Framing mask setting.
+
+When Framing crops a shot, DNG defaults to native 3:2 and preserves the camera's digital crop setting. RAW editors that apply the DNG default crop show this 3:2 area. Embedded previews can still show the selected composition.
 
 ## Registrations
 
@@ -171,28 +292,43 @@ A registration connects a part of the module to an extension point of the core. 
 | --- | --- | --- |
 | `GRKIT_POINT_MENU_PAGE` (menu.page) | `GrkitPage` | `page` |
 | `GRKIT_POINT_OVERLAY_LAYER` (overlay.layer) | `GrkitLayer` | `layers` |
+| `GRKIT_POINT_VIEWFINDER_INDICATOR` (viewfinder.indicator) | `GrkitIndicator` | `indicators` |
 | `GRKIT_POINT_PICTURE_PLANE` (picture.plane) | `GrkitPlaneFilter` | `filters` |
 
 ### Pages
 
-A page is a choice page in ADJ: one row for each value of its setting. OK on a row sets the value. The root shows a page only if it has two rows or more, in the order of the modules, which ADJ Order in MENU can change. The installer rejects a page whose number of rows is not the number of values of its setting.
+A `choice` page lists one row for each value of its setting in ADJ. OK on a row sets the value. ADJ shows a choice page when it has at least two rows. ADJ Order in MENU sets the module order. The installer rejects a page whose number of rows is not the number of values of its setting.
 
 A page of a setting of the module can also give 2 to 5 rows of a native settings page (`GRKIT_SETTING_ROWS`), as `modules/date` does. The first row is the page setting, and the others are settings of the module or used settings, with at most 8 values each. The text of a used setting gives its `values`. INSTALL leaves out the row of an optional used setting that no module has. Fn in ADJ opens this page.
+
+A `settings` page shows one ADJ entry with its title and module tile. OK, Right, Fn, or a touch opens the native settings directly. Each row changes only its own setting. MENU shows Enable followed by the same rows.
+
+A `group` page shows one ADJ entry. OK opens an icon list of its children. A selection mark identifies each child that is on. OK on a child opens a list of the values of its first setting, with the value texts of its settings page and the child icon of each value. OK on a value sets it and closes ADJ, as on a choice page. MENU returns from the value list to the child's row of the group.
+
+Fn on a child opens the child's native settings page. Returning to ADJ restores the selected child.
+
+MENU shows the module's Enable row and one row for each child, with the value of the child's first setting. Each child row opens the same native settings page as ADJ. Returning from that page restores the module page. The module's Enable setting controls the whole module.
 
 Each module also has a row in the GRKit section of MENU. It opens Enable, then the rows of the settings page, or the row of the page setting for a page without settings rows. See [GRKit section of MENU](architecture.md#grkit-section-of-menu).
 
 ### Layers
 
-A layer paints over the still live view. The core calls `paint` for each draw of the live view with the value of the layer setting. It does not call `paint` while the value is 0.
+A layer paints over the still live view. The core calls `paint` for each draw of the live view with the value of the layer setting. It skips a layer whose setting is zero or whose enabled conditions do not match.
 
-The surface has 720 x 480 pixels of 32 bits. A pixel holds red in its low byte, then green, blue, and alpha in its high byte, so the bytes in memory are R, G, B, A:
+The surface has 720 x 480 pixels of 32 bits. A pixel holds red in its low byte, then green, blue, and alpha in its high byte. The bytes in memory are R, G, B, A:
 
 | Field | Meaning |
 | --- | --- |
 | `data` | the address of the pixels. Use `SURFACE_PIXEL(s, x, y)` to address a pixel. |
 | `stride` | the distance between rows, in pixels |
-| `area` | the capture area that the surface shows: 0 for the full 3:2 area, else the `CORE.ASPECT` value of the crop |
-| `box` | the photo area {left, top, right, bottom} |
+| `area` | the displayed area: 0 for full 3:2, otherwise a ratio value from `CORE.ASPECT`. See the layer rules below. |
+| `box` | the displayed area {left, top, right, bottom}, with right and bottom excluded |
+
+A layer receives the selected framing area, in Crop mode and in Guides Only mode.
+Without a framing area, it receives the photo area of the camera's native aspect ratio.
+A layer whose setting is `CORE.ASPECT` receives area 0 without a framing area.
+
+In ADJ, each layer previews the highlighted ratio.
 
 Layers paint in ascending `order`. A layer with the same order as another paints after the layers of earlier modules. The official layers use these orders:
 
@@ -200,7 +336,6 @@ Layers paint in ascending `order`. A layer with the same order as another paints
 | --- | --- |
 | 10 | the Framing mask |
 | 20 | Guides |
-| 30 | the Framing ratio label |
 
 The manifest keys `follow_disp`, `full_disp`, and `live_only` set the flags `GRKIT_LAYER_FOLLOW_DISP`, `GRKIT_LAYER_FULL_DISP`, and `GRKIT_LAYER_LIVE_ONLY`. While the page of a layer setting is open in ADJ, the core paints the layer with the highlighted value on the ADJ canvas.
 
@@ -237,10 +372,12 @@ A module calls the core only through these functions. The installer links each c
 | --- | --- |
 | `u32 setting_get(u32 handle)` | The value of a setting. 0 for `GRKIT_NO_SETTING`. |
 | `void setting_set(u32 handle, u32 value)` | Set a setting. A value out of range does nothing. |
-| `u32 effect_find(const char *id)` | The value of `CORE.TONE` for the installed effect with the effect ID `id`, such as `"portra-400-endura-v1"`, or 0. Since ABI 2.1. See [Finding an effect](#finding-an-effect). |
+| `u32 effect_find(const char *id)` | The value of `CORE.TONE` for the installed effect with the effect ID `id`, such as `"portra-400-endura-v1"`, or 0. Since ABI 2.6. See [Finding an effect](#finding-an-effect). |
 | `void overlay_label(const Surface *s, u32 label, u32 left, u32 top)` | Draw a label of the core with its top left at (left, top), in the style of the native live-view text. A label that does not fit draws nothing. |
 | `void local_time(GrkitDateTime *out)` | The local time: year, month, day, hour, minute, and second. |
 | `u32 divide(u32 n, u32 d)` | n / d, rounded down, for d > 0. |
+| `void picture_white(const PictureSet *set, u8 white[3])` | The R, G, B white of the effect of a recorded picture: the levels that its brightest light reaches. 255 each without an effect. A color effect ends below 255. Since ABI 2.1. |
+| `void picture_shot(const PictureSet *set, GrkitShot *shot)` | The shooting data of a recorded picture, as its EXIF records it: the exposure (APEX values, the exposure value of the scene, the f-number, the ISO speed, the exposure time), the exposure compensation, the focal length, the program, the metering, the flash, and the capture time. Set `shot->size` to `sizeof(GrkitShot)` first. `known` has a bit for each group of fields that holds a value. Since ABI 2.1. |
 | `u32 timer_start(u32 ms, void (*fire)(u32 arg), u32 arg)` | Call `fire(arg)` once, `ms` milliseconds later, in the App task. Returns a timer, or 0 when no timer is free or the caller is not in the App task. |
 | `void timer_cancel(u32 timer)` | Stop a timer that has not fired. |
 | `u32 ui_toast(GrkitText text, u32 ms)` | Show a message panel for `ms` milliseconds. See [UI](#ui). |
@@ -293,22 +430,45 @@ The UI services show the native message box of the camera. A text is a `GrkitTex
 - The box shows only while the GRKit page of ADJ is open. A call returns 1 when the box shows, else 0.
 - One box shows at a time. A toast closes when a new box opens. A message, a confirm, or a progress box takes each key until it closes.
 - ADJ exit closes the box without a callback.
-- OK on a row of a module page commits the value and closes ADJ, as OK on a native value does. If the commit makes the module show a box or open a native screen (in its `SETTING_CHANGED` handler), ADJ stays open on the page, so the box shows.
+- OK on a row of a choice page commits the value and closes ADJ, as OK on a native value does. A commit can make the module show a box or open a native screen in its `SETTING_CHANGED` handler. ADJ then stays open on the page, so the box shows.
 - `ui_confirm` shows Execute and Cancel, with the cursor on Cancel. Up, Down, Left, and Right move the cursor. OK calls `done(1, arg)` for Execute, else `done(0, arg)`. MENU calls `done(0, arg)`.
 - `ui_message` closes on OK or MENU and calls `done(arg)`.
 - A progress box takes the keys until `ui_progress_close`. Use a timer to move the bar.
-- `ui_slider` shows the text and the native slider. Up and Down move it by one, Left and Right by a tenth of the range, and each move calls `changed(value, arg)`, for example to preview the value. OK calls `done(1, value, arg)`, MENU `done(0, start, arg)` with the value at the start. The range has at most 65536 values.
+- `ui_slider` shows the text and the native slider. Up and Down move it by one. Left and Right move it by a tenth of the range. Each move calls `changed(value, arg)`, for example to preview the value. OK calls `done(1, value, arg)`, MENU `done(0, start, arg)` with the value at the start. The range has at most 65536 values.
 - `ui_open_native` opens a native screen after the current event. MENU on the screen returns to ADJ, which opens the GRKit page that was open, and then the core calls `back(arg)` (`back` can be 0). The screens: `GRKIT_NATIVE_WHITE_BALANCE` (the white balance list of still mode) and `GRKIT_NATIVE_LCD` (the LCD settings). It returns 0 for an unknown screen, while a message, a confirm, or a progress box shows, or while another screen waits to open.
 
 The UI services work only in an event handler, a timer callback, or a UI callback, which the core calls in the App task. In other code they return 0.
 
 ## ABI and compatibility
 
-**ABI version.** `GRKIT_ABI` is 2.1: the major version in the high 16 bits, the minor version in the low 16 bits. The build writes it into the file header and into the descriptor. The installer loads a module whose major version equals that of the core and whose minor version is not larger. A minor version only adds functions and registration types. A major version changes a layout. In 2.0, each text list also has a Korean text, so the installer rejects a module with ABI 1.0 (status 51). Build such a module again with a `text/ko.toml`. 2.1 adds `effect_find`. A module built with the 2.1 SDK has ABI 2.1, so a core of ABI 2.0 rejects it (status 51), also when the module does not call `effect_find`.
+**ABI version.** `GRKIT_ABI` is 2.4: the major version in the high 16 bits, the minor version in the low 16 bits. The build writes it into the file header and into the descriptor. The installer loads a module whose major version equals that of the core and whose minor version is not larger. A minor version adds capabilities without changing existing contracts. A major version can change an existing layout.
 
-**File format.** A module file is GRM version 1 (`grkit_core::grm`): a header, the code, the data, the relocations, and the imports. The build compiles each source as Thumb code for ARMv7-A with `-Os`. The installer only moves absolute 32-bit words and fills the imports by name hash. The build rejects other relocation types and each undefined symbol that is not a service or `grkit_self`.
+In 2.0, each text list also has a Korean text. The installer rejects a module with ABI 1.0 (status 51). Build such a module again with a `text/ko.toml`.
 
-**Memory.** The code, with the constant data, goes after the RTOS image and is read-only. The data and BSS go into one script array that all modules share, and INSTALL clears the BSS. The installer runs no module code at power-on: it reads the constant descriptor `grkit_module`.
+ABI 2.1 adds `picture_white`, `picture_shot`, setting defaults, and the settings and group page kinds. `GrkitSetting` appends `default_value`, and `GrkitPage` appends the group `children` pointer. The installer accepts older 16-byte settings and 40-byte pages. Older settings have default 0. A group needs the 44-byte page descriptor and registers each child separately.
+
+ABI 2.2 adds `GrkitIndicator`, `GrkitCondition`, and `GrkitIcon`. `GrkitPage` appends an optional `icon` pointer after `children`. The installer still accepts 40-byte and 44-byte pages. Their icons keep the existing tile rules. `GrkitLayer` and `Surface` keep their existing layouts.
+
+ABI 2.3 appends `condition_count` and `conditions` to `GrkitLayer`, increasing its descriptor from 20 to 28 bytes.
+The installer still accepts 20-byte layers, which have no enabled conditions.
+A 28-byte layer without conditions has count zero and a null pointer.
+A conditional layer has 1 to 4 `GrkitCondition` entries.
+The installer rejects layer descriptors of 21 to 27 bytes.
+`Surface` keeps its existing layout.
+
+ABI 2.3 also moves the tiles out of the code. The header word at offset 60, which was reserved and 0, gives the number of tiles that follow the import names. The descriptor then gives `tile_count` and a null `tiles` pointer. The installer still accepts tiles in the code, through a `tiles` pointer and a header word of 0. It rejects tiles after the file of a module of ABI 2.2 or earlier, tiles in both places, and a `tile_count` that differs from the header.
+
+ABI 2.3 adds the icon kind `GRKIT_ICON_LABEL` (3) for status-row indicators: a core live-view label, `first_tile` + n for setting value n, or `first_tile` without a setting. The installer rejects it for pages and the Image Control slot, and when the labels of the setting values do not exist.
+
+ABI 2.4 adds the setting flag `GRKIT_SETTING_COLOR_ONLY` (4). The installer of an earlier core rejects a setting with this flag.
+
+ABI 2.4 also appends `flags` to `GrkitModule`, increasing its descriptor from 40 to 44 bytes. The flag `GRKIT_MODULE_COLOR_ONLY` (1) makes a module color-only. The installer still accepts 40-byte descriptors, which have no flags, and rejects an unknown flag.
+
+ABI 2.6, of Emulsion and not of GRKit, adds `effect_find`. A GRKit core rejects a module built with this SDK (status 51), also when the module does not call `effect_find`.
+
+**File format.** A module file is GRM version 1 (`grkit_core::grm`): a header, the code, the data, the relocations, the imports, and the tiles. The build compiles each source as Thumb code for ARMv7-A with `-Os`. The installer only moves absolute 32-bit words and fills the imports by name hash. The build rejects other relocation types and each undefined symbol that is not a service or `grkit_self`.
+
+**Memory.** The code, with the constant data, goes after the RTOS image and is read-only. The tiles stay out of it: INSTALL copies them from the file to the icon slots. The data and BSS go into one script array that all modules share, and INSTALL clears the BSS. The installer runs no module code at power-on: it reads the constant descriptor `grkit_module`.
 
 **Stack.** Module code runs on the stacks of firmware tasks. The build rejects a function whose stack frame is larger than 1536 bytes. It does not check the total stack of nested calls.
 
@@ -329,6 +489,7 @@ The UI services work only in an event handler, a timer callback, or a UI callbac
 | Tiles of one module | 64 | build error, or 53 |
 | Tiles of all loaded modules | 128 | 54 |
 | Rows of a choice page | 1 to 64 | build error, or 53 |
+| Children of a group page | 1 to 4 | build error, or 53 |
 | Rows of a native settings page | 5 | build error, or 53 |
 | Values of a native settings row | 8 | 53 |
 | Event subscribers | 1 in each module | 53 |
@@ -360,6 +521,10 @@ Other lines:
 | --- | --- |
 | `loaded` | The module loaded. |
 | `loaded, stopped: Enable is Off in the GRKit section of MENU` | The module loaded, but Enable is Off, so the core calls none of its code. On applies at once. |
+| `loaded, stopped: Enable GRKit is Off in the GRKit section of MENU` | The module loaded, but Enable GRKit is Off, so the core calls none of its code. On applies at once. |
 | `not loaded: safe mode` | GRKit is in the safe mode, so no module loads. See [Report and safe mode](architecture.md#report-and-safe-mode). |
+| `not loaded: it needs a camera with a color sensor` | The module is `color_only`, and the camera is GR IV Monochrome. The GRKit section of MENU does not list it. |
+
+When no loaded module uses the effects, as on GR IV Monochrome without Film Look, each effect line says `not used: no loaded module uses effects`.
 
 When a module does not load, the other modules still load. A module that requires a setting of it gets error 55. A page, a layer, or a filter of an optional setting of it is not registered.

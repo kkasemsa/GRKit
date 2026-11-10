@@ -6,7 +6,12 @@
 //!
 //! A file has a header, the code segment (text and read-only data), the data
 //! segment (initialized writable data), the relocations of each segment, the
-//! imports, and the import names. All numbers are little-endian `u32`.
+//! imports, the import names, and the artwork tiles. All numbers are
+//! little-endian `u32`.
+//!
+//! The tiles follow the file, not the code: INSTALL copies them to the icon
+//! chunks, so they take no module code memory. A module of ABI 2.2 or earlier
+//! has its tiles in the code and none after the names.
 //!
 //! The module is linked with its code segment at address 0 and its data
 //! segment at [`DATA_LINK`]. A relocated word holds such a link address. The
@@ -30,10 +35,14 @@ pub const DATA_LOCATION: u32 = 0x8000_0000;
 /// in the low half. The installer loads a module whose major equals its own
 /// and whose minor is not larger than its own (`runtime/sdk/grkit.h`).
 pub const ABI_MAJOR: u32 = 2;
-pub const ABI_MINOR: u32 = 1;
+pub const ABI_MINOR: u32 = 6;
 /// The largest code, data, or BSS size of one module that the installer
 /// accepts.
 pub const MAX_SEGMENT: usize = 0x10000;
+/// The bytes of one artwork tile: 40 x 40 RGBA (`GRM_TILE_BYTES`).
+pub const TILE_BYTES: usize = 40 * 40 * 4;
+/// The most tiles of one module that the installer accepts (`GRM_TILES`).
+pub const MAX_TILES: usize = 64;
 /// The longest module ID, which is also the file name before `.GRM`.
 pub const ID_SIZE: usize = 8;
 /// The order of a module without `order` in its manifest. The official
@@ -52,6 +61,8 @@ pub const EXPORTS: &[(&str, &str)] = &[
     ("effect_find", "grkit_export_effect_find"),
     ("local_time", "grkit_export_local_time"),
     ("divide", "grkit_export_divide"),
+    ("picture_white", "grkit_export_picture_white"),
+    ("picture_shot", "grkit_export_picture_shot"),
     ("timer_start", "grkit_export_timer_start"),
     ("timer_cancel", "grkit_export_timer_cancel"),
     ("ui_toast", "grkit_export_ui_toast"),
@@ -66,8 +77,11 @@ pub const EXPORTS: &[(&str, &str)] = &[
 /// The import that the installer fills with the context of each module
 /// (`GrkitContext` in `runtime/sdk/grkit.h`).
 pub const CONTEXT: &str = "grkit_self";
-/// The size of a module descriptor (`GrkitModule`).
+/// The smallest module descriptor: `GrkitModule` before ABI 2.4.
 pub const DESCRIPTOR_SIZE: u32 = 40;
+/// The size of a descriptor with the module flags (ABI 2.4), which the
+/// build writes (`GRM_DESCRIPTOR_FLAGS`).
+pub const DESCRIPTOR_FLAGS_SIZE: u32 = 44;
 
 /// Whether a module can import `name`.
 pub fn importable(name: &str) -> bool {
@@ -127,6 +141,17 @@ pub struct Module {
     pub code_relocations: Vec<u32>,
     pub data_relocations: Vec<u32>,
     pub imports: Vec<Import>,
+    /// The artwork tiles, [`TILE_BYTES`] each, after the import names. The
+    /// descriptor gives their count and no address (ABI 2.3).
+    pub tiles: Vec<u8>,
+}
+
+/// The placement declared by a viewfinder indicator. Package verification
+/// checks shared capacity; INSTALL validates its settings and artwork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IndicatorPlacement {
+    NativeSlot(u32),
+    StatusRow,
 }
 
 /// Whether `id` is a valid module ID: 1 to 8 characters `A-Z`, `0-9`, or `_`.
@@ -176,6 +201,12 @@ impl Module {
                 self.id
             );
         }
+        ensure!(
+            self.tiles.len().is_multiple_of(TILE_BYTES)
+                && self.tiles.len() / TILE_BYTES <= MAX_TILES,
+            "{} has more than {MAX_TILES} tiles or a partial tile",
+            self.id
+        );
         ensure!(
             self.descriptor.is_multiple_of(4)
                 && inside(self.descriptor, DESCRIPTOR_SIZE as usize, self.code.len()),
@@ -231,6 +262,50 @@ impl Module {
         Ok(())
     }
 
+    /// Read only the placement of each indicator from the unrelocated code.
+    /// Code pointers in a GRM are offsets from zero. Bound every read before
+    /// package verification uses it; do not execute or link module code.
+    pub(crate) fn indicator_placements(&self) -> Result<Vec<IndicatorPlacement>> {
+        const POINT_INDICATOR: u32 = 5;
+        const REGISTRATIONS_MAX: usize = 16;
+        let descriptor = self.descriptor as usize;
+        let count = word(&self.code, descriptor + 12)? as usize;
+        ensure!(count <= REGISTRATIONS_MAX, "Too many module registrations");
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let list = word(&self.code, descriptor + 8)?;
+        ensure!(
+            list % 4 == 0 && inside(list, count * 8, self.code.len()),
+            "Invalid module registration table"
+        );
+        let mut placements = Vec::new();
+        for index in 0..count {
+            let entry = list as usize + index * 8;
+            if word(&self.code, entry)? != POINT_INDICATOR {
+                continue;
+            }
+            let address = word(&self.code, entry + 4)?;
+            ensure!(
+                address % 4 == 0 && inside(address, 24, self.code.len()),
+                "Invalid viewfinder indicator descriptor"
+            );
+            let address = address as usize;
+            ensure!(
+                word(&self.code, address)? >= 24,
+                "Truncated viewfinder indicator descriptor"
+            );
+            let placement = word(&self.code, address + 4)?;
+            let slot = word(&self.code, address + 8)?;
+            placements.push(match (placement, slot) {
+                (1, 1) => IndicatorPlacement::NativeSlot(slot),
+                (2, 0) => IndicatorPlacement::StatusRow,
+                _ => anyhow::bail!("Invalid viewfinder placement {placement} with slot {slot}"),
+            });
+        }
+        Ok(placements)
+    }
+
     /// The file bytes.
     pub fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
@@ -260,7 +335,7 @@ impl Module {
         put(&mut out, self.imports.len() as u32);
         put(&mut out, names.len() as u32);
         put(&mut out, self.order);
-        put(&mut out, 0);
+        put(&mut out, (self.tiles.len() / TILE_BYTES) as u32);
         debug_assert_eq!(out.len(), HEADER_SIZE);
         out.extend_from_slice(&self.code);
         out.extend_from_slice(&self.data);
@@ -276,6 +351,7 @@ impl Module {
             put(&mut out, location);
         }
         out.extend_from_slice(&names);
+        out.extend_from_slice(&self.tiles);
         Ok(out)
     }
 
@@ -299,7 +375,8 @@ impl Module {
             (field(0)?, field(1)?, field(2)?, field(3)?, field(4)?);
         let (code_count, data_count, import_count, names_size) =
             (field(5)?, field(6)?, field(7)?, field(8)?);
-        let order = field(9)?;
+        let (order, tile_count) = (field(9)?, field(10)?);
+        ensure!(tile_count as usize <= MAX_TILES, "Too many module tiles");
         let mut at = HEADER_SIZE;
         let mut take = |length: usize| -> Result<&[u8]> {
             let part = bytes
@@ -319,6 +396,7 @@ impl Module {
         let data_relocations = words(take(data_count as usize * 4)?);
         let entries = words(take(import_count as usize * 8)?);
         let names = take(names_size as usize)?;
+        let tiles = take(tile_count as usize * TILE_BYTES)?.to_vec();
         ensure!(at == bytes.len(), "Trailing bytes in module file");
         let mut name_list = names.split(|&b| b == 0);
         let mut imports = Vec::new();
@@ -350,6 +428,7 @@ impl Module {
             code_relocations,
             data_relocations,
             imports,
+            tiles,
         };
         module.validate()?;
         Ok(module)
@@ -503,6 +582,7 @@ mod tests {
                 segment: Segment::Code,
                 offset: 24,
             }],
+            tiles: vec![],
         }
     }
 
@@ -512,6 +592,26 @@ mod tests {
         let bytes = module.encode().unwrap();
         assert_eq!(&bytes[..4], b"GRKM");
         assert_eq!(Module::decode(&bytes).unwrap(), module);
+    }
+
+    #[test]
+    fn tiles_follow_the_names_and_take_no_code() {
+        let mut module = sample();
+        module.tiles = (0..2 * TILE_BYTES).map(|i| i as u8).collect();
+        let bytes = module.encode().unwrap();
+        assert_eq!(word(&bytes, 60).unwrap(), 2);
+        assert_eq!(&bytes[bytes.len() - 2 * TILE_BYTES..], &module.tiles[..]);
+        assert_eq!(word(&bytes, 24).unwrap() as usize, module.code.len());
+        assert_eq!(Module::decode(&bytes).unwrap(), module);
+        // A missing tile byte, or one tile too many in the header.
+        assert!(Module::decode(&bytes[..bytes.len() - 1]).is_err());
+        let mut more = bytes.clone();
+        more[60] = 3;
+        assert!(Module::decode(&more).is_err());
+        module.tiles.push(0);
+        assert!(module.encode().is_err());
+        module.tiles = vec![0; (MAX_TILES + 1) * TILE_BYTES];
+        assert!(module.encode().is_err());
     }
 
     #[test]

@@ -1,8 +1,10 @@
 import type { Camera } from './cameras';
 import type { Grade } from './catalog';
 import type { Input } from './import/names';
+import type { NativeProblem } from './import/native';
 import type { Language } from './i18n';
 import type { ModuleKey, ModulePlan } from './modules';
+import { TransferError } from './transfer';
 
 type Props = Record<string, string>;
 
@@ -44,6 +46,37 @@ export function trackDownload(
   language: Language,
 ): void {
   track('Download', downloadProps(camera, plan, effectCount, language));
+}
+
+/** The kind of site file of `url`, by its first folder: runtime, effect, module, guide, or packager. */
+function fileKind(url: string): string {
+  const path = new URL(url, 'https://grkit.app/').pathname;
+  if (path.endsWith('.wasm')) return 'packager';
+  const folder = path.split('/').find((part) => part !== '') ?? '';
+  return { runtime: 'runtime', effects: 'effect', modules: 'module', guides: 'guide' }[folder] ?? 'other';
+}
+
+/**
+ * The properties of a package that the page could not make: the camera, `zip` or `card`, whether
+ * the page runs in an app browser, and the cause. A file that did not arrive gives the reason
+ * (`stall`, `network`, or the HTTP status) and its kind, never its URL.
+ */
+export function downloadErrorProps(camera: Camera, mode: 'zip' | 'card', appBrowser: boolean, error: unknown): Props {
+  const props: Props = { camera: camera.key, mode, app: appBrowser ? 'yes' : 'no' };
+  if (error instanceof TransferError) {
+    props.reason = error.reason === 'status' ? String(error.status) : error.reason;
+    props.file = fileKind(error.url);
+  } else if (error instanceof Error && error.message.startsWith('Effect checksum mismatch')) {
+    props.reason = 'checksum';
+  } else {
+    props.reason = 'other';
+  }
+  return props;
+}
+
+/** Records a package that the page could not make. */
+export function trackDownloadError(camera: Camera, mode: 'zip' | 'card', appBrowser: boolean, error: unknown): void {
+  track('Download Error', downloadErrorProps(camera, mode, appBrowser, error));
 }
 
 /** Records a write to a connected card: a first install, an update, or a change of the selection. */
@@ -104,6 +137,21 @@ export function trackImport(
   outcome: ImportOutcome,
 ): void {
   track('LUT Import', importProps(file, input, chosen, outcome));
+}
+
+/** A read of native looks from a firmware file: its GR IV version, or why it failed. */
+export type NativeOutcome = { result: 'ok'; version: string } | { result: 'failed'; problem: NativeProblem };
+
+/** The properties of a read of native looks. They hold no file name and no file data. */
+export function nativeLooksProps(outcome: NativeOutcome): Props {
+  return outcome.result === 'ok'
+    ? { result: 'ok', version: outcome.version }
+    : { result: 'failed', problem: outcome.problem };
+}
+
+/** Records a read of the Cinema looks from a GR IV firmware file that ended. */
+export function trackNativeLooks(outcome: NativeOutcome): void {
+  track('Cinema Unlock', nativeLooksProps(outcome));
 }
 
 /** Records a saved identity HALD image. */

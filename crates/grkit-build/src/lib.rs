@@ -2,6 +2,7 @@
 pub mod arm;
 pub mod components;
 pub mod dump;
+pub mod fastboot;
 pub mod firmware;
 pub mod loader;
 pub mod module;
@@ -14,7 +15,7 @@ use anyhow::{ensure, Context, Result};
 use firmware::sha256;
 pub use firmware::verify_firmware;
 use grkit_core::{
-    runtime::{icon_stride, runtime_files_for},
+    runtime::{icon_stride, runtime_files_with},
     Files,
 };
 use serde_json::{json, Value};
@@ -69,6 +70,42 @@ pub struct PatchPlan {
     /// (`grkit_core::grm::symbol_hash`) and the offset of its code in the tail.
     pub exports: Vec<(u32, u32)>,
 }
+impl PatchPlan {
+    /// The aligned span of the core payloads. Modules start immediately after it.
+    pub(crate) fn core_size(&self, tail: u32) -> Result<u32> {
+        ensure!(
+            tail < components::RTOS_EXECUTABLE_END,
+            "Private tail is outside the executable mapping"
+        );
+        let mut end = tail;
+        for patch in &self.patches {
+            if patch.site != Some(Anchor::Tail) {
+                ensure!(
+                    u64::from(patch.address) >= u64::from(components::RTOS_EXECUTABLE_END)
+                        || u64::from(patch.address) + patch.after.len() as u64 <= u64::from(tail),
+                    "Private payload has no tail anchor"
+                );
+                continue;
+            }
+            ensure!(patch.address >= tail, "Private code precedes the tail");
+            let size = u32::try_from(patch.after.len()).context("Private payload is too large")?;
+            let patch_end = patch
+                .address
+                .checked_add(size)
+                .context("Private payload end overflows")?;
+            ensure!(
+                patch_end <= components::RTOS_EXECUTABLE_END,
+                "Private payload exceeds the executable mapping"
+            );
+            end = end.max(patch_end);
+        }
+        if end == tail {
+            return Ok(0);
+        }
+        Ok(components::aligned_code_end(end)? - tail)
+    }
+}
+
 #[derive(Debug)]
 pub struct BuildResult {
     pub output: PathBuf,
@@ -173,7 +210,7 @@ pub fn build_module(
     fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
     fs::create_dir(directory)
         .with_context(|| format!("Create new build directory {}", directory.display()))?;
-    let directory = directory.canonicalize()?;
+    let directory = directory.canonicalize().map(crate::plain_path)?;
     let runtime = directory.join("runtime");
     materialize_runtime(&runtime)?;
     let sources: Vec<PathBuf> = sources
@@ -181,6 +218,7 @@ pub fn build_module(
         .map(|source| {
             source
                 .canonicalize()
+                .map(crate::plain_path)
                 .with_context(|| format!("Read {}", source.display()))
         })
         .collect::<Result<_>>()?;
@@ -209,12 +247,13 @@ pub fn build_module_manifest(
     fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
     fs::create_dir(directory)
         .with_context(|| format!("Create new build directory {}", directory.display()))?;
-    let directory = directory.canonicalize()?;
+    let directory = directory.canonicalize().map(crate::plain_path)?;
     let runtime = directory.join("runtime");
     materialize_runtime(&runtime)?;
     let module = module::build_manifest(
         &module_directory
             .canonicalize()
+            .map(crate::plain_path)
             .with_context(|| format!("Read {}", module_directory.display()))?,
         &runtime.join("sdk"),
         &directory,
@@ -230,12 +269,13 @@ pub fn test_module_manifest(module_directory: &Path, directory: &Path, cc: &str)
     fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
     fs::create_dir(directory)
         .with_context(|| format!("Create new build directory {}", directory.display()))?;
-    let directory = directory.canonicalize()?;
+    let directory = directory.canonicalize().map(crate::plain_path)?;
     let runtime = directory.join("runtime");
     materialize_runtime(&runtime)?;
     module::test_manifest(
         &module_directory
             .canonicalize()
+            .map(crate::plain_path)
             .with_context(|| format!("Read {}", module_directory.display()))?,
         &runtime.join("sdk"),
         &directory,
@@ -264,7 +304,7 @@ fn core_exports(
                 })?;
             Ok((
                 grkit_core::grm::symbol_hash(name),
-                base - layout.tail.0 + offset,
+                base - layout.tail + offset,
             ))
         })
         .collect()
@@ -281,17 +321,19 @@ fn build_image(
     }
     fs::create_dir(output)
         .with_context(|| format!("Create new build directory {}", output.display()))?;
-    let output = output.canonicalize()?;
+    let output = output.canonicalize().map(crate::plain_path)?;
     let objects = output.join("objects");
     let runtime = objects.join("runtime");
     materialize_runtime(&runtime)?;
     fs::write(runtime.join("hooks.h"), components::hooks_header(image)?)?;
     let mut built: Vec<(&str, components::Component)> = Vec::new();
+    let mut processing_end = image.target.layout.tail;
     if image.target.family.processing_source.is_some() {
         let component = components::processing(&objects, &runtime, image, tools)?;
+        processing_end = component.patches[0].address + component.code_size as u32;
         built.push(("processing", component));
     }
-    let mut menu = components::menu(&objects, &runtime, image, tools)?;
+    let menu = components::menu(&objects, &runtime, image, tools, processing_end)?;
     let menu_base = menu.patches[0].address;
     let framing = components::framing(
         &objects,
@@ -300,9 +342,6 @@ fn build_image(
         tools,
         menu_base + menu.code_size as u32,
     )?;
-    // The menu can grow by the space that Framing leaves free at the end of
-    // the tail.
-    menu.limit = menu.code_size + (framing.limit - framing.code_size);
     built.push(("menu", menu));
     built.push(("framing", framing));
     let components: Vec<_> = built.iter().map(|(_, component)| component).collect();
@@ -342,6 +381,8 @@ fn build_image(
         exports,
     };
     validate_plan(&plan)?;
+    let core_size = plan.core_size(image.target.layout.tail)?;
+    let core_end = image.target.layout.tail + core_size;
     let generated = loader::header(&plan, image, env!("CARGO_PKG_VERSION"))?;
     fs::write(objects.join("module_payload.h"), &generated)?;
     let source = runtime.join("installer.c");
@@ -383,7 +424,8 @@ fn build_image(
             path(&object)?,
         ],
     )?;
-    let files = runtime_files_for(&fs::read(binary)?, icon_stride(image.target.name)?);
+    let fast = fastboot::files(tools, &objects, &runtime, image.target.name)?;
+    let files = runtime_files_with(&fs::read(binary)?, &fast, icon_stride(image.target.name)?);
     ensure!(
         !files
             .values()
@@ -401,12 +443,17 @@ fn build_image(
         "firmware_sha256": image.sha256, "decoded_firmware_sha256": image.decoded_sha256,
         "source_sha256": source_hashes(), "generated_header_sha256": sha256(generated.as_bytes()),
         "components": built.iter().map(|(name, component)| (name.to_string(),
-            json!({"sha256": sha256(&component.patches[0].after), "size": component.code_size, "limit": component.limit})))
+            json!({"sha256": sha256(&component.patches[0].after), "size": component.code_size, "limit": component.limit,
+                "address": component.patches[0].address,
+                "end": component.patches[0].address + component.code_size as u32})))
             .collect::<serde_json::Map<_, _>>(),
+        "code_memory": {"base": image.target.layout.tail, "end": core_end,
+            "used": core_size, "available": components::RTOS_EXECUTABLE_END - core_end,
+            "limit": components::RTOS_EXECUTABLE_END},
         // The firmware changes of each extension point, which a package
         // without its modules does not make.
         "points": components::Point::ALL.iter().map(|point| (point.name().to_owned(),
-            json!(plan.patches.iter().filter(|patch| patch.points == point.bit()).count())))
+            json!(plan.patches.iter().filter(|patch| patch.points & point.bit() != 0).count())))
             .collect::<serde_json::Map<_, _>>(),
     }) else {
         unreachable!("an object literal")
@@ -427,3 +474,12 @@ fn build_image(
 
 #[cfg(test)]
 mod tests;
+
+/// Drops the Windows verbatim prefix (`\\?\`) that
+/// `canonicalize` adds, because Clang resolves `#include "..."` against it.
+pub(crate) fn plain_path(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => path,
+    }
+}

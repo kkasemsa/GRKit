@@ -15,6 +15,7 @@
 .text
 /* The installer relocates this literal to the private host header. */
 .global framing_header
+.type framing_header, %function
 framing_header:
     ldr r0, =GRKIT_HEADER_REFERENCE
     bx lr
@@ -78,7 +79,8 @@ framing_children:
 #endif
 /* The id 2 geometry in r12: 0 = 16:9, 1 = XPan, 2 = 2.35:1. GRKIT_HOST_FRAME_FILE
    is 0 while shooting, else 1 + the geometry of the photo that the classifier
-   saw last. Clobbers only r12 and the flags. */
+   saw last. Shooting follows GRKIT_HOST_FRAME_CROP, the crop that applies in
+   the native aspect (runtime/framing.c). Clobbers only r12 and the flags. */
 wide_mode:
     ldr r12, =GRKIT_HEADER_REFERENCE
     ldrb r12, [r12, #GRKIT_HOST_FRAME_FILE]
@@ -87,7 +89,7 @@ wide_mode:
     sub r12, r12, #1
     bx lr
 1:  ldr r12, =GRKIT_HEADER_REFERENCE
-    ldr r12, [r12, #GRKIT_HOST_FRAME_RATIO]
+    ldr r12, [r12, #GRKIT_HOST_FRAME_CROP]
     cmp r12, #1
     bxeq lr
     cmp r12, #4
@@ -141,7 +143,8 @@ INSET framing_thumbnail_inset, 16, 30, 26
 #error "The family header defines the 5:4, 1:1, and 7:6 sizes"
 #endif
 /* The id 1 geometry in r12: 0 = 4:3, 1 = 5:4, 2 = 1:1, 3 = 7:6. Shooting
-   follows the Framing ratio (value 6 for 5:4, 5 for 1:1, 7 for 7:6),
+   follows GRKIT_HOST_FRAME_CROP (value 6 for 5:4, 5 for 1:1, 7 for 7:6), so
+   the native 4:3 keeps its sizes,
    playback the photo that the classifier saw last (GRKIT_HOST_FRAME_FILE 4
    for 5:4, 5 for 7:6). Clobbers only r12 and the flags. */
 narrow_mode:
@@ -157,7 +160,7 @@ narrow_mode:
     movne r12, #0
     bx lr
 1:  ldr r12, =GRKIT_HEADER_REFERENCE
-    ldr r12, [r12, #GRKIT_HOST_FRAME_RATIO]
+    ldr r12, [r12, #GRKIT_HOST_FRAME_CROP]
     cmp r12, #6
     moveq r12, #1
     bxeq lr
@@ -311,6 +314,75 @@ framing_image_aspect:
     movhs r0, #1
     bx lr
 6:  ldr pc, =HOOK_FRAMING_IMAGE_ASPECT_TARGET
+#ifdef HOOK_FRAMING_DEVELOP_ASPECT
+#if !defined(DEVELOP_MODEL) || !defined(DEVELOP_ASPECT)
+#error "The family header defines the RAW development registers"
+#endif
+/* RAW development of a DNG (runtime/framing.c). This replaces the BL that
+   gives the initial development aspect for the recorded capture aspect.
+   framing_develop_select returns the development aspect, or -1 for the
+   native choice. */
+.global framing_develop_aspect
+framing_develop_aspect:
+    mov r0, DEVELOP_MODEL
+    mov r1, DEVELOP_ASPECT
+    push {r0,r1,r4,lr}
+    bl framing_develop_select
+    cmn r0, #1
+    popne {r1,r2,r4,pc}
+    pop {r0,r1,r4,lr}
+    ldr pc, =HOOK_FRAMING_DEVELOP_ASPECT_TARGET
+/* These replace the BLs that turn the development aspect (r1, model r0) into
+   a capture aspect: where the development sends it to the pipeline, and
+   where it gives the size of the developed photo. framing_develop_geometry
+   sets the geometry, and framing_develop_capture gives the capture aspect of
+   a Framing ratio. The GetResolution hooks above then give the size of the
+   developed photo. */
+.macro DEVELOP_CAPTURE name, target
+.global \name
+\name:
+    push {r0,r1,r4,lr}
+    bl framing_develop_geometry
+    pop {r0,r1}
+    ldr r12, =\target
+    blx r12
+    bl framing_develop_capture
+    pop {r4,pc}
+.endm
+DEVELOP_CAPTURE framing_develop_push, HOOK_FRAMING_DEVELOP_PUSH_TARGET
+DEVELOP_CAPTURE framing_develop_size, HOOK_FRAMING_DEVELOP_SIZE_TARGET
+.ltorg
+#endif
+#ifdef HOOK_FRAMING_RESIZE_SOURCE
+#ifndef RESIZE_SIZE
+#error "The family header names the register of the resize source size"
+#endif
+/* Resize of the photo in playback (runtime/framing.c). This replaces
+   `mov r0, RESIZE_SIZE` at the end of the getter of the size {width, height}
+   that the camera looks up in its resize size table. */
+.global framing_resize_source
+framing_resize_source:
+    push {r0-r3,r12,lr}
+    mov r0, RESIZE_SIZE
+    bl framing_resize_stock
+    pop {r0-r3,r12,lr}
+    mov r0, RESIZE_SIZE
+    bx lr
+#endif
+#ifdef HOOK_FRAMING_PLAY_ASPECT
+/* This replaces the first instruction (`mov ip, sp`) of the function that
+   gives the aspect of an image size {width, height} (r0) in playback edits.
+   It runs the function, then framing_resize_play_aspect corrects the result
+   for a Framing size. */
+.global framing_play_aspect
+framing_play_aspect:
+    push {r0,lr}
+    adr lr, 1f
+    mov ip, sp
+    ldr pc, =HOOK_FRAMING_PLAY_ASPECT_RESUME
+1:  pop {r1,lr}
+    b framing_resize_play_aspect
+#endif
 #endif
 #ifdef HOOK_FRAMING_LEVEL_THRESHOLD
 /* ScreenDevice::OnSetLevelAlarm (runtime/framing.c: highlight warning).

@@ -22,10 +22,39 @@
 extern volatile u32 *framing_header(void);
 
 #include "tone.h"
+#include "develop.h"
+/* A RAW development encodes the DNG in playback, not a new shot. Its picture
+   takes the time of that DNG from the playback metadata (runtime/targets). */
+#ifndef PICTURE_DEVELOPING
+#ifdef FW_DEVELOP_MODEL
+#define PICTURE_DEVELOPING() ((BYTE(FW_DEVELOP_GUARD,0)&1U) && BYTE(FW_DEVELOP_MODEL,DEVELOP_STATE))
+#define PICTURE_PHOTO_TIME(out) do { \
+    u32 data_=((u32 (*)(void))FW_PLAYBACK_METADATA)(), i_; \
+    for(i_=0;i_<8;++i_) (out)[i_]=BYTE(data_,METADATA_TIME+i_); \
+} while(0)
+/* The EXIF Orientation of that DNG. */
+#define PICTURE_PHOTO_ORIENTATION() BYTE(((u32 (*)(void))FW_PLAYBACK_METADATA)(),METADATA_ORIENTATION)
+#else
+#define PICTURE_DEVELOPING() 0
+#define PICTURE_PHOTO_TIME(out) PICTURE_DATE(out)
+#define PICTURE_PHOTO_ORIENTATION() 1
+#endif
+#endif
 static u32 owned(volatile u32 *h,u32 record) { return record_index(h,record)<GRKIT_TEXT_RECORDS; }
 /* Features of an owned record, or 0 for a native one. */
 static u32 record_features(volatile u32 *h,u32 record) {
     return owned(h,record) ? WORD(record,GRKIT_RECORD_FEATURES) : 0;
+}
+/* The record whose ImageTone code is `code`, or 0. The installer gives each
+   record a distinct code with bit 15 set. */
+static u32 record_of_code(volatile u32 *h,u32 code) {
+    u32 n=h[GRKIT_HOST_COUNT/4], i, record;
+    if(!(code&0x8000U) || n>GRKIT_TEXT_RECORDS) return 0;
+    for(i=0;i<n;++i) {
+        record=h[GRKIT_HOST_RECORDS/4]+i*GRKIT_RECORD_SIZE;
+        if(HALF(record,GRKIT_RECORD_CODE)==code) return record;
+    }
+    return 0;
 }
 /* The tuning context byte of a build, from the Make's third argument (settings +
    0x120): 1 for ImageTuningLiveview, 0 for a still build. module_parameters reads
@@ -38,17 +67,56 @@ static u32 record_features(volatile u32 *h,u32 record) {
    Selective color changes only recorded pictures, so the live view of such an
    effect drops its chroma rows: the viewfinder shows the luma that the removed
    hues keep in the picture. */
+#ifdef NATIVE_SATURATION_BEFORE_CURVES
+/* GR IV saturation: a matrix on gamma-encoded RGB, with 9-bit fractions.
+   It is RGB x diag(1, f, f) x YCbCr, from the BT.601 matrices with 8-bit
+   fractions. f is 1.1 to the power of the level (-4 to 4), rounded to three
+   decimals. */
+static const s16 saturation_ycbcr[9]={77,150,29,-43,-85,128,128,-107,-21};
+static const s16 saturation_rgb[9]={256,0,359,256,-88,-183,256,454,0};
+static const u16 saturation_factors[9]={683,751,826,909,1000,1100,1210,1331,1464};
+/* The saturation matrix of a native value, as a Q13 post matrix. */
+static void picture_saturation(u32 value,int out[9]) {
+    int factor=saturation_factors[value],sum;
+    u32 i,j;
+    for(i=0;i<3;++i) for(j=0;j<3;++j) {
+        sum=saturation_rgb[i*3]*saturation_ycbcr[j]*1000
+            +(saturation_rgb[i*3+1]*saturation_ycbcr[3+j]+saturation_rgb[i*3+2]*saturation_ycbcr[6+j])*factor;
+        /* 512 / (256 x 256 x 1000), rounded half away from zero. */
+        out[i*3+j]=(sum<0 ? -((64000-sum)/128000) : (sum+64000)/128000)*16;
+    }
+}
+#endif
 static void post_matrix(volatile u32 *h,u32 object,u32 context,u32 settings) {
-    u32 record=WORD(context,8),features,i,j,k;
+    u32 record=WORD(context,8),features,i,j,k,apply=0;
     int csp[9],post[9],sum;
     PICTURE_YCBCR_CALC(object,context);
     features=record_features(h,record);
     if(features&GRKIT_FEATURE_POST) {
+        for(i=0;i<9;++i) post[i]=(s16)HALF(record,GRKIT_RECORD_POST+i*2);
+        apply=1;
+    }
+#ifdef NATIVE_SATURATION_BEFORE_CURVES
+    /* A native look applies saturation after the tone curves and the post
+       matrix, as GR IV does. module_parameters gives the native processing
+       the neutral value. */
+    if((features&GRKIT_FEATURE_NATIVE_LOOK) && (i=develop_parameter(h,record,0,PICTURE_DEVELOPING()))!=4) {
+        int saturation[9],product[9];
+        picture_saturation(i,saturation);
+        if(apply) {
+            for(i=0;i<3;++i) for(j=0;j<3;++j) {
+                sum=0;
+                for(k=0;k<3;++k) sum+=saturation[i*3+k]*post[k*3+j];
+                product[i*3+j]=(sum+4096)>>13;
+            }
+            for(i=0;i<9;++i) post[i]=product[i];
+        } else for(i=0;i<9;++i) post[i]=saturation[i];
+        apply=1;
+    }
+#endif
+    if(apply) {
         /* The live view builds this matrix each frame: read each word once. */
-        for(i=0;i<9;++i) {
-            csp[i]=(int)(WORD(object,i*4)<<23)>>23;
-            post[i]=(s16)HALF(record,GRKIT_RECORD_POST+i*2);
-        }
+        for(i=0;i<9;++i) csp[i]=(int)(WORD(object,i*4)<<23)>>23;
         for(i=0;i<3;++i) for(j=0;j<3;++j) {
             sum=0;
             for(k=0;k<3;++k) sum+=csp[i*3+k]*post[k*3+j];
@@ -120,9 +188,156 @@ static u32 core_divide(u32 n,u32 d) {
     while(bit) { if(n>=d) { n-=d; q|=bit; } d>>=1; bit>>=1; }
     return q;
 }
-/* The core exports these services to modules (runtime/sdk/grkit.h). */
-__attribute__((used)) void grkit_export_local_time(u8 *out) { PICTURE_DATE(out); }
+/* The core exports these services to modules (runtime/sdk/grkit.h). The local
+   time is the time of the picture: the clock for a shot, the time of the DNG
+   for a RAW development, so that Date Imprint prints the day of the photo. */
+/* Whether a GrkitDateTime holds a date and a time that the camera can set. */
+static u32 picture_time_valid(const u8 *t) {
+    u32 year=t[0]|(u32)t[1]<<8;
+    return year>=2000 && year<=2099 && t[2]>=1 && t[2]<=12 && t[3]>=1 && t[3]<=31 &&
+           t[4]<24 && t[5]<60 && t[6]<60;
+}
+__attribute__((used)) void grkit_export_local_time(u8 *out) {
+    if(PICTURE_DEVELOPING()) {
+        PICTURE_PHOTO_TIME(out);
+        if(picture_time_valid(out)) return;
+    }
+    PICTURE_DATE(out);
+}
 __attribute__((used)) u32 grkit_export_divide(u32 n,u32 d) { return core_divide(n,d); }
+/* The white of the effect of a recorded picture: input 255 of the curves of
+   its record, after its post matrix, as R, G, B levels, and 255 each without
+   a record. The Fn adjustments are not in it. runtime/level.h gives the luma
+   of the same white to the live-view highlight warning. */
+__attribute__((used)) void grkit_export_picture_white(const PictureSet *set,u8 *white) {
+    u32 record=set->record, post, k, c;
+    int rgb[3], v;
+    if(!record) { white[0]=white[1]=white[2]=255; return; }
+    post=WORD(record,GRKIT_RECORD_FEATURES)&GRKIT_FEATURE_POST;
+    for(c=0;c<3;++c) rgb[c]=(int)HALF(record,GRKIT_RECORD_CURVES+c*GRKIT_RECORD_CURVE_SIZE+255*2);
+    for(k=0;k<3;++k) {
+        v=rgb[k];
+        if(post) {
+            v=0;
+            for(c=0;c<3;++c) v+=(s16)HALF(record,GRKIT_RECORD_POST+(k*3+c)*2)*rgb[c];
+            v=(v+4096)>>13;
+        }
+        v=v<0 ? 0 : v>16383 ? 16383 : v;
+        white[k]=(u8)(((u32)v*255U+8192U)>>14);
+    }
+}
+/* picture_shot: the shooting data of the shot of a plane set, in the
+   layout of GrkitShot (GRKIT_SHOT_INFO_* in abi.h). */
+#define SHOT_INVALID ((int)0x80000000)
+/* An IEEE single in 1/256 units, rounded, or SHOT_INVALID when it is not
+   finite or not below 2^23. */
+static int shot_q8(u32 bits) {
+    u32 e=(bits>>23)&255, m=(bits&0x7fffffU)|0x800000U;
+    int shift=(int)e-142, v;
+    if(!(bits&0x7fffffffU)) return 0;
+    if(e==255 || shift>7) return SHOT_INVALID;
+    if(shift>=0) v=(int)(m<<shift);
+    else if(shift<-25) v=0;
+    else v=(int)((m+(1U<<(-shift-1)))>>(-shift));
+    return bits>>31 ? -v : v;
+}
+/* base x 2^(x/256), rounded, at most 0xffffffff. */
+static u32 shot_exp2(u32 base,int x) {
+    /* 2^(k/32) in Q16, k = 0 to 32. */
+    static const u32 table[33]={
+        65536,66971,68438,69936,71468,73032,74632,76266,77936,79642,81386,
+        83169,84990,86851,88752,90696,92682,94711,96785,98905,101070,103283,
+        105545,107856,110218,112631,115098,117618,120194,122825,125515,128263,131072};
+    int i=x>>8;
+    u32 f=(u32)x&255, k=f>>3, t=f&7;
+    u32 m=table[k]+(((table[k+1]-table[k])*t+4)>>3);
+    unsigned long long r=(unsigned long long)base*m;
+    int shift=16-i;
+    if(shift<=0) return shift<-16 || (r<<(-shift))>>32 ? 0xffffffffU : (u32)(r<<(-shift));
+    if(shift>=64) return 0;
+    r=(r+(1ULL<<(shift-1)))>>shift;
+    return r>>32 ? 0xffffffffU : (u32)r;
+}
+/* log2(v) in 1/256 units, for v > 0. */
+static int shot_log2(u32 v) {
+    unsigned long long y;
+    int n=31, k, q=0;
+    while(!(v>>n)) --n;
+    /* y in [1, 2) as Q30. */
+    y=n>=30 ? (unsigned long long)(v>>(n-30)) : (unsigned long long)v<<(30-n);
+    for(k=0;k<8;++k) {
+        y=(y*y)>>30;
+        q<<=1;
+        if(y>=(2ULL<<30)) { y>>=1; q|=1; }
+    }
+    return n*256+q;
+}
+static void info_half(u8 *out,u32 at,u32 v) { out[at]=(u8)v; out[at+1]=(u8)(v>>8); }
+static void info_word(u8 *out,u32 at,u32 v) { info_half(out,at,v&0xffff); info_half(out,at+2,v>>16); }
+__attribute__((used)) void grkit_export_picture_shot(const PictureSet *set,u8 *out) {
+    static const u8 program[]={SHOT_PROGRAM_CODES}, metering[]={5,2,3};
+    u8 info[GRKIT_SHOT_INFO_BYTES];
+    u32 shot=set->shot, size=out[0]|out[1]<<8|out[2]<<16|(u32)out[3]<<24, known=0, i, v;
+    for(i=0;i<GRKIT_SHOT_INFO_BYTES;++i) info[i]=0;
+    if(shot>=0x40000000U && shot<=0xbff00000U) {
+        int av=shot_q8(WORD(shot,SHOT_APEX)), tv=shot_q8(WORD(shot,SHOT_APEX+4)), sv=shot_q8(WORD(shot,SHOT_APEX+8));
+        int xv=shot_q8(WORD(shot,SHOT_APEX+12)), focal=shot_q8(WORD(shot,SHOT_FOCAL)), crop=shot_q8(WORD(shot,SHOT_CROP));
+        u32 time=0, mode=BYTE(shot,SHOT_LONG_MODE);
+        if(mode-SHOT_LONG_FIRST<2U) {
+            /* Time or bulb: the time decides the shutter value. */
+            unsigned long long t=(unsigned long long)WORD(shot,SHOT_TIME)|(unsigned long long)WORD(shot,SHOT_TIME+4)<<32;
+            time=t>>32 ? 0xffffffffU : (u32)t;
+            if(time) tv=19*256+238-shot_log2(time); /* log2(1e6) = 19.93 */
+        }
+        else if(BYTE(shot,SHOT_TIME_SET)) time=WORD(shot,SHOT_TIME);
+        /* Av about -1 to 12, Tv -12 to 16, Sv 2 to 20: else no exposure. */
+        if(av>-256 && av<12*256 && tv>-12*256 && tv<16*256 && sv>2*256 && sv<20*256) {
+            if(!time) time=shot_exp2(1000000,-tv);
+            info_word(info,GRKIT_SHOT_INFO_AV,(u32)av);
+            info_word(info,GRKIT_SHOT_INFO_TV,(u32)tv);
+            info_word(info,GRKIT_SHOT_INFO_SV,(u32)sv);
+            info_word(info,GRKIT_SHOT_INFO_SCENE_EV,(u32)(av+tv-sv+5*256));
+            info_word(info,GRKIT_SHOT_INFO_EXPOSURE_US,time);
+            info_half(info,GRKIT_SHOT_INFO_F_NUMBER,shot_exp2(10,av>>1));
+            v=shot_exp2(100,sv-5*256);
+            info_half(info,GRKIT_SHOT_INFO_ISO,v>65535 ? 65535 : v);
+            known|=GRKIT_SHOT_INFO_KNOWN_EXPOSURE;
+        }
+        if(xv>-16*256 && xv<16*256) { info_word(info,GRKIT_SHOT_INFO_COMPENSATION,(u32)xv); known|=GRKIT_SHOT_INFO_KNOWN_COMPENSATION; }
+        if(focal>0 && focal<1000*256) {
+            /* In 1/10 mm, and as 35 mm film: times 1.5339 (Q16 100526) and the crop. */
+            info_half(info,GRKIT_SHOT_INFO_FOCAL,(u32)(focal*10+128)>>8);
+            if(crop>0 && crop<8*256) info_half(info,GRKIT_SHOT_INFO_FOCAL_35MM,(u32)((((unsigned long long)focal*100526U*(u32)crop>>16)+32768)>>16));
+            known|=GRKIT_SHOT_INFO_KNOWN_FOCAL;
+        }
+        v=BYTE(shot,SHOT_PROGRAM);
+        if(v<sizeof(program)) { info[GRKIT_SHOT_INFO_PROGRAM]=program[v]; known|=GRKIT_SHOT_INFO_KNOWN_PROGRAM; }
+        v=BYTE(shot,SHOT_METERING);
+        if(v<sizeof(metering)) { info[GRKIT_SHOT_INFO_METERING]=metering[v]; known|=GRKIT_SHOT_INFO_KNOWN_METERING; }
+        /* EXIF Flash: off 0x10; on 8, with red-eye reduction 0x48; fired +1. */
+        v=!BYTE(shot,SHOT_FLASH_ON) ? 0x10U : (BYTE(shot,SHOT_FLASH_MODE)|2)==3 ? 0x48U : 8U;
+        if(v!=0x10U && BYTE(shot,SHOT_FLASH_FIRED)) v|=1;
+        info_half(info,GRKIT_SHOT_INFO_FLASH,v);
+        known|=GRKIT_SHOT_INFO_KNOWN_FLASH;
+        v=HALF(shot,SHOT_TAKEN);
+        if(v>=2000 && v<2200 && BYTE(shot,SHOT_TAKEN+2)-1U<12U && BYTE(shot,SHOT_TAKEN+3)-1U<31U) {
+            info_half(info,GRKIT_SHOT_INFO_TAKEN,v);
+            info[GRKIT_SHOT_INFO_TAKEN+2]=BYTE(shot,SHOT_TAKEN+2);
+            info[GRKIT_SHOT_INFO_TAKEN+3]=BYTE(shot,SHOT_TAKEN+3);
+            info[GRKIT_SHOT_INFO_TAKEN+4]=BYTE(shot,SHOT_TAKEN+5);
+            info[GRKIT_SHOT_INFO_TAKEN+5]=BYTE(shot,SHOT_TAKEN+6);
+            info[GRKIT_SHOT_INFO_TAKEN+6]=BYTE(shot,SHOT_TAKEN+7);
+            known|=GRKIT_SHOT_INFO_KNOWN_TAKEN;
+        }
+    }
+    /* The fields that the module's GrkitShot has: its size, as the module
+       set it, and the core's, the smaller. */
+    if(size>GRKIT_SHOT_INFO_BYTES) size=GRKIT_SHOT_INFO_BYTES;
+    if(size<8) return;
+    info_word(info,GRKIT_SHOT_INFO_SIZE,size);
+    info_word(info,GRKIT_SHOT_INFO_KNOWN,known);
+    for(i=0;i<size;++i) out[i]=info[i];
+}
 static void flush(const Plane *p) {
     PICTURE_CACHE_FLUSH(p->y,p->pitch*p->height);
     PICTURE_CACHE_FLUSH(p->c,p->pitch*(p->half ? p->height>>1 : p->height));
@@ -146,17 +361,37 @@ static u32 module_filters(volatile u32 *h) {
 #endif
 #include "selective.h"
 
-/* Visible area of a preview picture: black bars depend on the capture aspect. */
-static void visible_area(volatile u32 *h,Plane *p) {
+/* The visible-area id of a shot: the capture aspect, with the crop of
+   CORE.ASPECT when a module uses it. */
+static u32 shot_area(volatile u32 *h) {
+    u32 ratio=framing_crop(h);
+    return PICTURE_AREA_ID(PICTURE_NATIVE_ASPECT(),ratio);
+}
+/* The visible-area id of a RAW development, from the size of its main
+   picture: a Framing size (GRKIT_HOST_FRAME_FILE 2 to 5, runtime/framing.c),
+   else the nearest native aspect. The settings for shots do not apply. */
+static u32 developed_area(volatile u32 *h,const Plane *main) {
+    static const u8 file_area[4]={4,5,6,7};
+    /* Width x 100 / height of 3:2, 4:3, 16:9, and 1:1, in area id order. */
+    static const u8 ratios[4]={150,133,178,100};
+    u32 file=((volatile u8 *)h)[GRKIT_HOST_FRAME_FILE], w=main->width, hh=main->height, ratio, best=0, i;
+    if(file>=2 && file<=5) return file_area[file-2];
+    if(w<hh) { u32 t=w; w=hh; hh=t; }
+    ratio=core_divide(w*100,hh);
+    for(i=1;i<4;++i) {
+        u32 d=ratio>ratios[i] ? ratio-ratios[i] : ratios[i]-ratio;
+        u32 b=ratio>ratios[best] ? ratio-ratios[best] : ratios[best]-ratio;
+        if(d<b) best=i;
+    }
+    return best;
+}
+/* Visible area of a preview picture: black bars depend on the area id. */
+static void visible_area(u32 id,Plane *p) {
     /* Screennail and thumbnail insets for ids 0 (3:2), 1 (4:3), 2 (16:9), 3 (1:1), then XPan,
        2.35:1, 5:4, and 7:6 (runtime/framing.S). */
     static const u8 screennail[8][2]={{0,0},{40,0},{0,38},{120,0},{0,107},{0,87},{60,0},{80,0}};
     static const u8 thumbnail[8][2]={{0,8},{0,0},{0,16},{20,0},{0,30},{0,26},{6,0},{10,0}};
-    /* The capture area: the crop of CORE.ASPECT when a module uses it. */
-    u32 ratio=CAPABILITY_USED(h,GRKIT_CORE_ASPECT) ? h[GRKIT_HOST_FRAME_RATIO/4] : 0;
-    u32 native=PICTURE_NATIVE_ASPECT(), id;
     const u8 *inset=0;
-    id=PICTURE_AREA_ID(native,ratio);
     if(p->width==720 && p->height==480) inset=screennail[id];
     if(p->width==160 && p->height==120) inset=thumbnail[id];
     p->left=inset ? inset[0] : 0; p->top=inset ? inset[1] : 0;
@@ -175,12 +410,17 @@ static u32 plane_of(u32 image,u32 code,Plane *p) {
 /* A word of the shot ring entry (runtime/abi.h) of the still build of a
    shot: 1 with the word in `out`, or 0 without an entry. Newer entries come
    first. The key is read again after the word, because the build writes the
-   ring from another task. */
+   ring from another task. The first barrier acquires the published fields;
+   the second keeps the key check after those reads. */
+#if defined(__arm__)
+__attribute__((target("thumb"),minsize))
+#endif
 static u32 shot_word(volatile u32 *h,u32 shot,u32 field,u32 *out) {
     u32 ring=PICTURE_SCRATCH(h)+GRKIT_SHOT_RING, n=WORD(ring,0), i, entry, value;
     for(i=1;shot && i<=GRKIT_SHOT_ENTRIES;++i) {
         entry=ring+GRKIT_SHOT_ENTRY+((n-i)&(GRKIT_SHOT_ENTRIES-1))*GRKIT_SHOT_STRIDE;
         if(WORD(entry,GRKIT_SHOT_KEY)!=shot) continue;
+        PICTURE_BARRIER();
         value=WORD(entry,field);
         PICTURE_BARRIER();
         if(WORD(entry,GRKIT_SHOT_KEY)==shot) { *out=value; return 1; }
@@ -191,6 +431,35 @@ static u32 shot_word(volatile u32 *h,u32 shot,u32 field,u32 *out) {
 static u32 shot_record(volatile u32 *h,u32 shot) {
     u32 record;
     return shot_word(h,shot,GRKIT_SHOT_RECORD,&record) ? record : 0;
+}
+
+/* The native sensor rectangle for this shot's digital crop and aspect 3:2.
+   The assembly bridge supplies the firmware's hard-float calling convention. */
+#ifndef PICTURE_DNG_RECT
+void picture_dng_rect(u32 shot,u16 *rect);
+#define PICTURE_DNG_RECT(shot,rect) picture_dng_rect((shot),(rect))
+#endif
+#ifndef PICTURE_IFD_SET_LONG
+#define PICTURE_IFD_SET_LONG(entry,index,value) (((void (*)(u32,u32,u32))FW_IFD_SET_LONG)(entry,index,value))
+#endif
+/* Called after the native DNG tag setter. Only a shot captured with a
+   Framing crop overrides its default RAW crop. JPEG geometry, the source
+   descriptor, and embedded previews keep their recorded composition. */
+/* This metadata path uses Thumb to fit beside the pixel-processing hooks. */
+#if defined(__arm__)
+__attribute__((target("thumb"),minsize))
+#endif
+void picture_dng_crop(u32 setter,u32 entry,u32 size) {
+    u32 shot=WORD(setter,DNG_SETTER_SHOT), crop, info, i;
+    u16 rect[4];
+    if(HALF(entry,6)!=4 || WORD(entry,8)!=2 || !shot_word(framing_header(),shot,GRKIT_SHOT_FRAME_CROP,&crop) || !crop || crop>=8) return;
+    PICTURE_DNG_RECT(shot,rect);
+    info=WORD(setter,DNG_SETTER_INFO);
+    for(i=0;i<2;++i) {
+        /* DNG origins are relative to ActiveArea, whose origin is at +8/+12. */
+        u32 value=size ? rect[i] : rect[i+2]-WORD(info,8+i*4);
+        PICTURE_IFD_SET_LONG(entry,i,value);
+    }
 }
 /* The quarter turns clockwise that show the picture of a shot upright, as
    its EXIF Orientation does (1: 0, 6: 1, 3: 2, 8: 3), from the posture of the
@@ -206,8 +475,54 @@ static u32 picture_turns(volatile u32 *h,u32 shot) {
     WORD(ring,GRKIT_SHOT_LAST_TURNS)=turns[posture-1];
     return turns[posture-1];
 }
-/* For picture_capture_tone: the record of a shot, or 0. */
+#ifdef FW_DEVELOP_MODEL
+#ifndef PICTURE_PLAYBACK_TONE
+/* Key 0x25 of the playback metadata: a non-native Image Control tag as
+   0x10000 | (tag - 0x100). */
+#define PICTURE_PLAYBACK_TONE() WORD(((u32 (*)(void))FW_PLAYBACK_METADATA)(),METADATA_TONE)
+#endif
+/* The start of a RAW development: its effect is the effect that the DNG
+   records (the ImageTone code of the record, picture_capture_tone), or
+   native processing for a native photo or an effect that the camera no
+   longer has. It develops the native aspect of the DNG until its aspect list
+   selects a Framing ratio (runtime/menu.c). */
+void picture_develop_start(void) {
+    volatile u32 *h=framing_header();
+    u32 value=PICTURE_PLAYBACK_TONE(), record;
+    h[GRKIT_HOST_DEVELOP_RATIO/4]=0;
+    h[GRKIT_HOST_DEVELOP/4]=1;
+    /* The model gives each parameter set its values after this, so the
+       Standard set holds no effect's adjustments, and no effect keeps changed
+       ones (runtime/develop.h). */
+    h[GRKIT_HOST_DEVELOP_FILLED/4]=0;
+    h[GRKIT_HOST_DEVELOP_CHANGED/4]=0;
+    if(value>>16==1 && (record=record_of_code(h,(value+0x100)&0xffffU))) h[GRKIT_HOST_DEVELOP/4]=record;
+}
+#endif
+/* The quarter turns clockwise of an EXIF Orientation (1: 0, 6: 1, 3: 2, 8: 3). */
+static u32 orientation_turns(u32 orientation) {
+    return orientation==6 ? 1 : orientation==3 ? 2 : orientation==8 ? 3 : 0;
+}
+/* The record of a shot, or 0: the Fn adjustments of the shot (tag 0x247). */
 u32 picture_capture_record(u32 shot) { return shot_record(framing_header(),shot); }
+/* For picture_capture_tone: the record whose code the picture records, or 0.
+   A capture or a RAW development has the entry of its build in the shot
+   ring. A write without one in playback (GRKIT_HOST_FRAME_FILE is not 0
+   there, and 0 while shooting) is an edit of the photo shown, such as Resize,
+   which does not run Image Control: it keeps the GRKit effect that the photo
+   records. The native tag would record Standard. */
+u32 picture_capture_tone_record(u32 shot) {
+    volatile u32 *h=framing_header();
+    u32 record;
+    if(shot_word(h,shot,GRKIT_SHOT_RECORD,&record)) return record;
+#ifdef FW_DEVELOP_MODEL
+    if(((volatile u8 *)h)[GRKIT_HOST_FRAME_FILE]) {
+        u32 value=PICTURE_PLAYBACK_TONE();
+        if(value>>16==1) return record_of_code(h,(value+0x100)&0xffffU);
+    }
+#endif
+    return 0;
+}
 #ifndef PICTURE_IFD_SET_SHORT
 #define PICTURE_IFD_SET_SHORT(entry,index,value) (((void (*)(u32,u32,u32))FW_IFD_SET_SHORT)(entry,index,value))
 #endif
@@ -215,17 +530,32 @@ u32 picture_capture_record(u32 shot) { return shot_record(framing_header(),shot)
    GRKit shot. The native fill reads the settings of the native Image Control
    type. The record's Fn adjustments replace the nine Standard elements:
    saturation, hue, key, contrast, highlight, shadow, sharpness, then shading
-   and clarity. An element holds the shown value, -4 to 4, as camera photos
-   show. A stored byte (GRKIT_RECORD_PARAMETERS) is the shown value mod 9, and
-   a byte above 8 counts as 0. */
+   and clarity. An element holds the shown value, the native value less 4
+   (-4 to 4), as camera photos show. */
 void picture_record_parameters(u32 entry,u32 shot) {
     static const u8 elements[9]={0,1,2,3,4,5,6,9,10};
-    u32 record=picture_capture_record(shot), i, stored;
+    volatile u32 *h=framing_header();
+    u32 record=picture_capture_record(shot), running=PICTURE_DEVELOPING(), i;
     if(!record) return;
-    for(i=0;i<sizeof(elements);++i) {
-        stored=BYTE(record,GRKIT_RECORD_PARAMETERS+i);
-        PICTURE_IFD_SET_SHORT(entry,elements[i],stored>8 ? 0 : stored<=4 ? stored : (stored-9)&0xffffU);
-    }
+    for(i=0;i<sizeof(elements);++i)
+        PICTURE_IFD_SET_SHORT(entry,elements[i],(develop_parameter(h,record,i,running)-4)&0xffffU);
+}
+/* For grain_gate (runtime/picture.S): the stage flag of the grain stage of a
+   recorded picture. The stage gate runs before the parameter build of the
+   shot, so it reads the Shading and Clarity of the native Image Control type.
+   A GRKit effect gets the rule of the native Standard type with the values of
+   its record: the stage runs when Shading or Clarity (adjustments 7 and 8) is
+   not neutral. The record is the one that the build takes (module_parameters
+   in runtime/processing.h): the effect of a RAW development, or the
+   committed effect. Native processing keeps `flag`, the native result. */
+u32 picture_gate_flag(u32 flag) {
+    volatile u32 *h=framing_header();
+    u32 record, running;
+    if(!(h[GRKIT_HOST_CAPABILITIES/4]&GRKIT_CORE_TONE_BIT)) return flag;
+    running=PICTURE_DEVELOPING();
+    record=running ? h[GRKIT_HOST_DEVELOP/4] : h[GRKIT_HOST_ACTIVE/4];
+    if(!owned(h,record)) return flag;
+    return develop_parameter(h,record,7,running)!=4 || develop_parameter(h,record,8,running)!=4;
 }
 /* Whether the native Image Control type of a shot makes a monochrome picture,
    such as Monotone or a type of GR IV Monochrome. */
@@ -250,7 +580,10 @@ static void encode_shot(volatile u32 *h,u32 message) {
     set.record=0;
     set.mono=0;
     set.scratch=PICTURE_MAP(PICTURE_SCRATCH(h));
-    set.turns=picture_turns(h,WORD(config,0x34));
+    /* A RAW development turns as its DNG records, not as the camera is held. */
+    set.turns=PICTURE_DEVELOPING() ? orientation_turns(PICTURE_PHOTO_ORIENTATION()) : picture_turns(h,WORD(config,0x34));
+    /* The shooting data (picture_shot); in a RAW development, that of the DNG. */
+    set.shot=WORD(config,0x34);
     if(owned(h,record)) {
         set.record=record;
         set.mono=WORD(record,GRKIT_RECORD_MONOCHROME)&1;
@@ -272,10 +605,16 @@ static void encode_shot(volatile u32 *h,u32 message) {
         for(j=0;j<set.count;++j) seen|=done[j]==p.y;
         if(seen) continue;
         done[set.count]=p.y;
-        visible_area(h,&p);
         set.planes[set.count++]=p;
     }
     if(!set.count) return;
+    {
+        u32 area, main=0;
+        for(i=1;i<set.count;++i)
+            if(set.planes[i].width*set.planes[i].height>set.planes[main].width*set.planes[main].height) main=i;
+        area=PICTURE_DEVELOPING() ? developed_area(h,&set.planes[main]) : shot_area(h);
+        for(i=0;i<set.count;++i) visible_area(area,&set.planes[i]);
+    }
     for(i=0;i<set.count;++i) flush(&set.planes[i]);
     if(selective) selective_encode(&set);
     /* The module filters follow the color of the effect, in stage order. */
@@ -341,6 +680,8 @@ static u32 grain_counter(u32 *high) { *high=0; return 0; }
 /* Four xorshift128 generators side by side: generator i gives bytes 4i to
    4i + 3 of each 16 bytes, in little-endian order. */
 typedef struct { u32 a[4],b[4],c[4],d[4]; } GrainRandom;
+/* A word of a byte buffer. */
+typedef u32 __attribute__((may_alias)) GrainWord;
 /* splitmix32 of the count, so that close counts give unrelated states. */
 static u32 grain_mix(u32 *x) {
     u32 z=(*x+=0x9e3779b9U);
@@ -380,12 +721,14 @@ static void grain_random_row(GrainRandom *r,u8 *row,u32 pitch) {
     }
     vst1q_u32(r->a,a); vst1q_u32(r->b,b); vst1q_u32(r->c,c); vst1q_u32(r->d,d);
 #else
-    u32 i,t,v;
+    u32 i,t,v,word=!((u32)row&3U);
     for(;x+16<=pitch;x+=16) for(i=0;i<4;++i) {
         t=r->a[i]^(r->a[i]<<11);
         r->a[i]=r->b[i]; r->b[i]=r->c[i]; r->c[i]=r->d[i];
         v=r->d[i]=r->d[i]^(r->d[i]>>19)^t^(t>>8);
-        row[x+4*i]=(u8)v; row[x+4*i+1]=(u8)(v>>8); row[x+4*i+2]=(u8)(v>>16); row[x+4*i+3]=(u8)(v>>24);
+        /* The camera is little-endian, so a word store writes the four bytes. */
+        if(word) ((GrainWord *)(void *)(row+x))[i]=v;
+        else { row[x+4*i]=(u8)v; row[x+4*i+1]=(u8)(v>>8); row[x+4*i+2]=(u8)(v>>16); row[x+4*i+3]=(u8)(v>>24); }
     }
 #endif
 }
@@ -484,10 +827,19 @@ static void grain_center(u8 *tile,u32 n) {
         for(y=0;y<n;++y) tile[y*n+x]=grain_shift(tile[y*n+x],d);
     }
 }
-/* 16 samples of the plane from two half deviations. */
-static void grain_add16(u8 *out,const u8 *a,const u8 *b) {
+/* The sample of the plane for each sum of two half deviations, 0 to 510:
+   128 plus the deviation of the sum times sqrt 2, limited to 0..255. */
+#define GRAIN_SUMS 511U
+static u8 grain_sample(u32 sum) {
+    int s=(int)sum-256, v=128+s+((2*s*GRAIN_SQRT2_PART+32768)>>16);
+    return (u8)(v<0 ? 0 : v>255 ? 255 : v);
+}
+/* 16 samples of the plane from two half deviations. The scalar code reads
+   the samples from `sums` (grain_sample of each sum). */
+static void grain_add16(u8 *out,const u8 *a,const u8 *b,const u8 *sums) {
 #ifdef GRAIN_NEON
     uint8x16_t va=vld1q_u8(a),vb=vld1q_u8(b);
+    (void)sums;
     int16x8_t lo=vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(va),vget_low_u8(vb))),vdupq_n_s16(256));
     int16x8_t hi=vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(vget_high_u8(va),vget_high_u8(vb))),vdupq_n_s16(256));
     lo=vaddq_s16(vaddq_s16(lo,vqrdmulhq_s16(lo,vdupq_n_s16(GRAIN_SQRT2_PART))),vdupq_n_s16(128));
@@ -495,27 +847,47 @@ static void grain_add16(u8 *out,const u8 *a,const u8 *b) {
     vst1q_u8(out,vcombine_u8(vqmovun_s16(lo),vqmovun_s16(hi)));
 #else
     u32 i;
-    int v;
-    for(i=0;i<16;++i) {
-        int s=(int)a[i]+(int)b[i]-256;
-        v=128+s+((2*s*GRAIN_SQRT2_PART+32768)>>16);
-        out[i]=(u8)(v<0 ? 0 : v>255 ? 255 : v);
-    }
+    for(i=0;i<16;++i) out[i]=sums[a[i]+b[i]];
 #endif
+}
+/* The sum of the two tiles repeats every GRAIN_PERIOD samples along a row,
+   and every GRAIN_PERIOD rows down the plane: the least common multiple of
+   the tile widths. */
+#define GRAIN_PERIOD 3840U
+_Static_assert(!(GRAIN_PERIOD%GRAIN_TILE_A) && !(GRAIN_PERIOD%GRAIN_TILE_B) && !(GRAIN_PERIOD%16U),
+               "A period holds whole tiles and whole 16-sample blocks");
+/* Copy `n` bytes from `in` to `out` forwards, so a copy onto a later part of
+   its own source repeats it. A multiple of 16 bytes. */
+static void grain_repeat(u8 *out,const u8 *in,u32 n) {
+    u32 i;
+    if(!(((u32)out|(u32)in)&3U)) {
+        GrainWord *o=(GrainWord *)(void *)out;
+        const GrainWord *s=(const GrainWord *)(const void *)in;
+        for(i=0;i<n/4U;++i) o[i]=s[i];
+    } else {
+        for(i=0;i<n;++i) out[i]=in[i];
+    }
 }
 /* Fill the plane with the sum of the two tiles, each from the place that
    `place_a` and `place_b` give: the start column in 16-sample blocks in the
-   low half, the start row in the high half. */
+   low half, the start row in the high half. The samples after the first
+   period of a row, and the rows after the first period, repeat earlier ones. */
 static void grain_layers(u8 *plane,u32 pitch,u32 height,const u8 *a,const u8 *b,u32 place_a,u32 place_b) {
-    u32 y,x,row_a=place_a>>16,row_b=place_b>>16;
+    u32 y,x,row_a=place_a>>16,row_b=place_b>>16,width=pitch<GRAIN_PERIOD ? pitch : GRAIN_PERIOD;
+    u8 sums[GRAIN_SUMS];
+    for(x=0;x<GRAIN_SUMS;++x) sums[x]=grain_sample(x);
     for(y=0;y<height;++y) {
         const u8 *line_a=a+row_a*GRAIN_TILE_A,*line_b=b+row_b*GRAIN_TILE_B;
         u32 column_a=(place_a&0xffffU)*16U,column_b=(place_b&0xffffU)*16U;
         u8 *out=plane+y*pitch;
-        for(x=0;x<pitch;x+=16) {
-            grain_add16(out+x,line_a+column_a,line_b+column_b);
-            column_a+=16; if(column_a==GRAIN_TILE_A) column_a=0;
-            column_b+=16; if(column_b==GRAIN_TILE_B) column_b=0;
+        if(y>=GRAIN_PERIOD) grain_repeat(out,out-GRAIN_PERIOD*pitch,pitch);
+        else {
+            for(x=0;x<width;x+=16) {
+                grain_add16(out+x,line_a+column_a,line_b+column_b,sums);
+                column_a+=16; if(column_a==GRAIN_TILE_A) column_a=0;
+                column_b+=16; if(column_b==GRAIN_TILE_B) column_b=0;
+            }
+            if(pitch>width) grain_repeat(out+width,out,pitch-width);
         }
         if(++row_a==GRAIN_TILE_A) row_a=0;
         if(++row_b==GRAIN_TILE_B) row_b=0;
@@ -564,3 +936,43 @@ void grain_noise(u32 buffer,u32 size,u32 pitch,u32 height) {
     if(table) profile_add(table,GRKIT_PROFILE_PICTURE_GRAIN,core_divide(GRAIN_COUNTER(&high)-low,GRAIN_COUNTER_MHZ));
 }
 #endif
+
+#include "xmp.h"
+/* The JPEG header writer of the firmware: +0x18 the header buffer, +0x1c its
+   size, and +0x48 the offset of the APP7 preview segment. The header starts
+   with SOI, the APP1 marker and length, and "Exif\0\0", so the TIFF block
+   starts at JPEG_TIFF. GR III and GR IV share the layout. */
+#define JPEG_WRITER_BUFFER 0x18
+#define JPEG_WRITER_SIZE 0x1c
+#define JPEG_WRITER_APP7 0x48
+#define JPEG_TIFF 12U
+#ifndef PICTURE_JPEG_MAP
+#define PICTURE_JPEG_MAP(address,size) ((volatile u8 *)(address))
+#endif
+#define XMP_NAME_UNITS ((GRKIT_RECORD_MONOCHROME-GRKIT_RECORD_NAME)/2)
+/* For picture_jpeg_header and picture_jpeg_rewrite (runtime/picture.S),
+   after the firmware set up the APP1 Exif segment: an XMP segment with the
+   name of the look of the picture goes at +0x48, and +0x48 moves past it. The
+   APP7 setup, the maker-note offset of APP7, and the place of the main image
+   all follow +0x48. No segment is written while no module runs (the GRKit
+   switch is Off, or safe mode), for a code without a name, or into a buffer
+   without room for the largest APP7. */
+void picture_jpeg_xmp(u32 writer) {
+    volatile u32 *h=framing_header();
+    u32 buffer=WORD(writer,JPEG_WRITER_BUFFER), size=WORD(writer,JPEG_WRITER_SIZE), at=WORD(writer,JPEG_WRITER_APP7);
+    u32 code, record, segment, units=XMP_NAME_UNITS, i;
+    u16 name[XMP_NATIVE_UNITS>XMP_NAME_UNITS ? XMP_NATIVE_UNITS : XMP_NAME_UNITS];
+    if(!h || !h[GRKIT_HOST_CAPABILITIES/4] || !buffer || at<=JPEG_TIFF || at>size || (at&(XMP_ALIGN-1))) return;
+    if(!xmp_tone_code(PICTURE_JPEG_MAP(buffer+JPEG_TIFF,at-JPEG_TIFF),at-JPEG_TIFF,&code)) return;
+    if((record=record_of_code(h,code))) {
+        for(i=0;i<XMP_NAME_UNITS;++i) name[i]=HALF(record,GRKIT_RECORD_NAME+i*2);
+    } else if(xmp_native_name(code,name,XMP_NATIVE_UNITS)) {
+        units=XMP_NATIVE_UNITS;
+    } else {
+        return;
+    }
+    segment=xmp_segment_size(name,units);
+    if(!segment || segment>size-at || size-at-segment<XMP_APP7_RESERVE) return;
+    xmp_write_segment(PICTURE_JPEG_MAP(buffer+at,segment),segment,name,units);
+    WORD(writer,JPEG_WRITER_APP7)=at+segment;
+}

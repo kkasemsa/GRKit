@@ -5,26 +5,32 @@
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit は、RICOH GR III・GR IIIx・GR IV に、フィルム風の色、XPan などの比率、日付写し込み、粒状感を追加するツールです。SD カードから動作し、ファームウェアは書き換えません。カードを抜けば、カメラは元の状態に戻ります。
+GRKit は、RICOH GR III・GR IIIx・GR IV に、フィルム風の色、XPan などの比率、日付写し込み、グロー、粒状感を追加するツールです。SD カードから動作し、ファームウェアは書き換えません。カードを抜けば、カメラは元の状態に戻ります。
 
 <p>
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.ja.jpg" alt="ADJ モードの GRKit ページ" width="49%">
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.ja.jpg" alt="MENU のカスタマイズタブにある GRKit" width="49%">
 </p>
 
-写真：nagi usano「[Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/)」、[CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)
+写真：[MIKI Yoshihito](https://www.flickr.com/photos/mujitra/53311001084/)、[CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)
 
 ## 機能
 
 撮影中に ADJ レバーを押し、6 番目の項目「GRK」を選びます。
 
 - **フィルムルック**：Portra 400、Velvia 100、Tri-X 400 など。撮影画面でそのまま確認できます。[grkit.app](https://grkit.app) で手持ちの `.cube` LUT や Lightroom プリセットも読み込めます。各ルックはオープンソースのフィルム LUT をもとに近似したもので、元の LUT とまったく同じではありません（[出典](effects/NOTICE.md)）。
-- **フレーミング**：XPan、2.35:1、16:9、4:3、5:4、7:6、1:1。撮影画面にマスクか枠線で範囲を表示します。
+- **フレーミング**：XPan、2.35:1、16:9、4:3、5:4、7:6、1:1。JPEG の切り抜きと構図ガイドのみを選べます。撮影画面にマスクか枠線で範囲を表示します。どちらのモードでも、比率を選ぶとカメラ側が 3:2 になります。オフにしてもカメラ側の比率は変わりません。
+
+  RAW の初期表示範囲はカメラ本来の 3:2 を保ち、カメラのクロップ設定も保持します。埋め込みプレビューには、選んだ構図が表示されることがあります。
+
 - **構図ガイド**：9 分割、画面中央、黄金比、対角線。
 - **日付入れ撮影**：クラシック、GR1s のドット、GR II の 3 種類の書体で写真に日付を入れます。
-- **粒状感**：強さは弱・中・強・特強、粒の大きさは自動・小・中・大から選べます。
+- **グロー**：ブルームはライトやハイライトの周囲に柔らかな光を広げます。ハレーションは明るい光源の周囲に赤橙色のにじみを加え、映画用フィルムのような効果を再現します。それぞれ有効・無効と強度を個別に設定でき、同時に使用できます。
+- **粒状感**：強度は弱・中・強・特強、粒の大きさは自動・小・中・大から選べます。
 
 GRKit の読み込みには、電源を入れてから約 8〜10 秒かかります。GR IV や、インストール・アップデート後の最初の起動ではもう少しかかります。それまではカメラ本来の設定で撮影されます。すべての設定は MENU のカスタマイズタブの最後にある GRKit にあります。モジュールを自作する場合は [Writing a module](docs/modules.md)（英語）をご覧ください。
+
+**高速起動**：オプションの[高速起動ファームウェア](resources/FASTBOOT.ja.md)を使うと、同じ GRKit パッケージが電源を入れてすぐに読み込まれます。grkit.app の[高速起動のページ](https://grkit.app/ja/fastboot/)で Ricoh の公式ファームウェアから作成し、ファームウェアの更新としてインストールします。GRKit 自体はファームウェアに書き込みません。
 
 ## 対応カメラ
 
@@ -78,6 +84,7 @@ grkit verify dist/GRKit.zip
 
 - [アーキテクチャ](docs/architecture.md)
 - [モジュールの作り方](docs/modules.md)と[モジュールリファレンス](docs/module-reference.md)
+- [高速起動ファームウェア](docs/fastboot.md)：SD スクリプト向けのインターフェース
 - [リリース手順](docs/releasing.md)
 - [エフェクト](effects/README.md)
 - [ウェブサイト](web/README.md)

@@ -54,9 +54,14 @@ pub const LINUX_RAM_PLAN: &str = "/tmp/grkit-plan.bin";
 
 /// The files of the package folder on the card.
 pub const LOADER_FILE: &str = concat!(package_folder!("/"), "/LOADER.TTL");
+/// The resident part of the loader, which `LOADER_FILE` includes after INSTALL
+/// (`runtime::resident`).
+pub const RESIDENT_FILE: &str = concat!(package_folder!("/"), "/RESIDENT.TTL");
 pub const CORE_FILE: &str = concat!(package_folder!("/"), "/CORE.BIN");
 pub const SCAN_FILE: &str = concat!(package_folder!("/"), "/SCAN.SH");
 pub const INSTALL_FILE: &str = concat!(package_folder!("/"), "/INSTALL.SH");
+/// The import library of the site (`crate::imports`). The camera does not read it.
+pub const IMPORTS_FILE: &str = concat!(package_folder!("/"), "/IMPORTS.BIN");
 /// The package list (`runtime/install_library.h`): the file name of each
 /// effect and module of the package, one on each line. Each package has it,
 /// also without effects, so a merge copy of a new package over an old one

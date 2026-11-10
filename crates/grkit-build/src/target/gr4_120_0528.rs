@@ -33,6 +33,7 @@ pub const TARGET: Target = Target {
     pixel_base_slot: 0x55082f38,
     pixel_base_indirect: true,
     native_tone_page: Some(0x81),
+    model_record: Some((0x553a22f8, 0x19)),
     layout: &LAYOUT,
     image_control: Some(&IMAGE_CONTROL),
     // As on 1.11: the settings domain follows the vtable of the capture
@@ -57,7 +58,7 @@ pub const IMAGE_CONTROL: ImageControl = ImageControl {
 /// The tail after the RTOS image (0x544029c0), with the regions of 1.11.
 pub const LAYOUT: Layout = Layout {
     define: "-DGRKIT_TARGET_GR4_120_0528",
-    tail: (0x54403000, 0x54410000),
+    tail: 0x54403000,
     contexts: CONTEXTS,
     sites: SITES,
     instruction_patches: INSTRUCTION_PATCHES,
@@ -83,8 +84,10 @@ const SITES: &[Site] = &[
     ("menu_event", 0x531c0404, "b030d1e1"),
     ("menu_exit", 0x531c0150, "fc11d0e5"),
     ("menu_changed", 0x531bff5c, "0dc0a0e1"),
+    ("menu_apply", 0x531bfaa4, "0dc0a0e1"),
     ("menu_text_measure", 0x53591c00, "077193e7"),
     ("menu_text_draw", 0x53592610, "073193e7"),
+    ("menu_tick_type", 0x531be8fc, "13feffeb"),
     ("menu_native_adj_apply", 0x531bb9a8, "0dc0a0e1"),
     ("menu_native_dialog_apply", 0x531c6464, "0dc0a0e1"),
     ("menu_native_page_event", 0x531c6f2c, "0dc0a0e1"),
@@ -174,6 +177,8 @@ const SITES: &[Site] = &[
     // The live-view mode function (0x538ad808) and the mode check (0x5365f164).
     ("framing_live_mode", 0x538ad820, "742bfbeb"),
     ("framing_live_check", 0x5365f17c, "1d6504eb"),
+    ("picture_dng_origin", 0x53824a48, "dafaffeb"),
+    ("picture_dng_size", 0x53824b00, "e0faffeb"),
     ("framing_height_0", 0x538f1050, "983d00e3"),
     ("framing_height_1", 0x538f103c, "ae3ea0e3"),
     ("framing_height_2", 0x538f1024, "7b3ea0e3"),
@@ -189,6 +194,12 @@ const SITES: &[Site] = &[
     ("framing_narrow_thumbnail", 0x538f1228, "b010c3e1"),
     ("framing_classify", 0x533b0174, "53fcffeb"),
     ("framing_image_aspect", 0x533b057c, "51fbffea"),
+    ("framing_develop_aspect", 0x5338277c, "5affffeb"),
+    ("framing_develop_push", 0x533829f4, "96ffffeb"),
+    ("framing_develop_size", 0x533829a8, "a9ffffeb"),
+    ("framing_resize_source", 0x533e7c48, "0400a0e1"),
+    ("framing_resize_target", 0x533e74f8, "d58f14eb"),
+    ("framing_play_aspect", 0x536b5bcc, "0dc0a0e1"),
     ("module_gamma_dirty", 0x539354b4, "0e30d4e5"),
     ("picture_post", 0x5393ba4c, "e9ffffeb"),
     ("picture_encode_entry", 0x53722b60, "0dc0a0e1"),
@@ -196,10 +207,39 @@ const SITES: &[Site] = &[
     // of tag 0x247 (handler 0x538310d4).
     ("picture_capture_tone", 0x53831864, "1c37ffeb"),
     ("picture_capture_parameters", 0x538310e0, "6c3bffeb"),
+    // The JPEG header setup (0x5382cffc for a write, 0x5382d25c for a rewrite):
+    // the BL to the APP1 Exif setup (0x5382ce60), which sets the APP7 offset
+    // at writer +0x48.
+    ("picture_jpeg_header", 0x5382d050, "82ffffeb"),
+    ("picture_jpeg_rewrite", 0x5382d2a8, "ecfeffeb"),
+    ("picture_develop_tone", 0x53382838, "d3faffeb"),
     ("framing_level_threshold", 0x539247a0, "fe5ca0e3"),
     ("framing_level_mode", 0x5392468c, "0610a0e1"),
     // LiveViewController histogram update: the BL to the 256-to-128 bin copy.
     ("framing_histogram", 0x531886a4, "e24d18eb"),
+    ("menu_develop_count", 0x531a213c, "0dc0a0e1"),
+    ("menu_develop_category", 0x533791ec, "0530d0e5"),
+    ("menu_develop_value", 0x5337921c, "0dc0a0e1"),
+    ("menu_develop_row", 0x531a2924, "0dc0a0e1"),
+    ("menu_develop_current", 0x531a3084, "0dc0a0e1"),
+    ("menu_develop_decide", 0x531a2b74, "0dc0a0e1"),
+    ("menu_develop_open", 0x531a39fc, "0dc0a0e1"),
+    ("menu_develop_fn", 0x531a35c0, "0dc0a0e1"),
+    ("menu_develop_restore", 0x531a3278, "627a07eb"),
+    ("menu_develop_list_text", 0x531a3938, "687807eb"),
+    ("menu_develop_top_text", 0x5319f1ec, "3b8a07eb"),
+    ("menu_develop_top_icon", 0x5319f480, "838907eb"),
+    // The aspect list of a RAW development: the entries of the row value of
+    // RawDevelopmentModel and of the aspect choice; the BL to the model
+    // restore in Restore; the BLs to the aspect label in UpdateSubTitle of the
+    // list and of RawDevelopmentTopController; the BL to the aspect icon of its
+    // rows.
+    ("menu_develop_aspect_value", 0x53379078, "0dc0a0e1"),
+    ("menu_develop_aspect_decide", 0x531a2ac0, "0dc0a0e1"),
+    ("menu_develop_aspect_restore", 0x531a3248, "f87d07eb"),
+    ("menu_develop_aspect_list_text", 0x531a38cc, "177c07eb"),
+    ("menu_develop_aspect_top_text", 0x5319f234, "bd8d07eb"),
+    ("menu_develop_aspect_top_icon", 0x5319f4d4, "048d07eb"),
     // DigitalFilterProcess SetEffectParameter (0x537212ec), and its stage
     // gate (0x537347ac, plan +0x25).
     ("grain_enable", 0x537214c0, "b537d4e5"),

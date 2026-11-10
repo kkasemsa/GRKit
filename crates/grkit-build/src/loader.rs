@@ -5,7 +5,9 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use grkit_core::{
-    artwork::{grkit_pixels, modules_pixels, off_pixels, version_pixels},
+    artwork::{
+        grkit_pixels, modules_off_pixels, modules_pixels, off_pixels, rotate_pixels, version_pixels,
+    },
     card::{LINUX_DATA_DIRECTORY, LINUX_DIRECTORY, LINUX_LEGACY_DIRECTORY, LINUX_RAM_PLAN},
     runtime::{icon_stride, HOST_ICON_COUNT, ICONS_PER_CHUNK, MAX_CHUNKS, MAX_COUNT},
 };
@@ -89,6 +91,10 @@ pub fn header(plan: &PatchPlan, body: &FirmwareImage, version: &str) -> Result<S
         "ICON_PIXEL_BASE_SLOT"
     };
     addresses.push((name, target.pixel_base_slot));
+    if let Some((record, sensor_color)) = target.model_record {
+        addresses.push(("MODEL_RECORD", record));
+        constants.push(("MODEL_SENSOR_COLOR", sensor_color));
+    }
     // The code, the data, and the BSS of the firmware end at `heap_min`. A
     // constant in that range is a firmware address that would not move with
     // the build.
@@ -204,9 +210,10 @@ pub fn header(plan: &PatchPlan, body: &FirmwareImage, version: &str) -> Result<S
     )?;
     writeln!(
         result,
-        "#define PARAMETER_KEY_BASE {}U\n#define PARAMETER_VALUE_MAX {}U",
+        "#define PARAMETER_KEY_BASE {}U\n#define PARAMETER_VALUE_MAX {}U\n#define TONING_KEY_BASE {}U",
         grkit_core::runtime::PARAMETER_KEY_BASE,
-        grkit_core::runtime::PARAMETER_VALUE_MAX
+        grkit_core::runtime::PARAMETER_VALUE_MAX,
+        grkit_core::runtime::TONING_KEY_BASE
     )?;
     writeln!(
         result,
@@ -280,6 +287,13 @@ pub fn header(plan: &PatchPlan, body: &FirmwareImage, version: &str) -> Result<S
     array(&mut result, "grkit_pixels", &grkit_pixels(), true);
     array(&mut result, "version_pixels", &version_pixels(), true);
     array(&mut result, "modules_pixels", &modules_pixels(), true);
+    array(
+        &mut result,
+        "modules_off_pixels",
+        &modules_off_pixels(),
+        true,
+    );
+    array(&mut result, "rotate_pixels", &rotate_pixels(), true);
     // The installer copies the menu text table after the picture scratch.
     let text = grkit_core::menu_text::table(version)?;
     writeln!(result, "#define MENU_TEXT_BYTES {}U", text.len())?;
@@ -401,14 +415,12 @@ fn relocation_tables(
     let target = body.target;
     let layout = target.layout;
     let mut planner = Planner::new(body)?;
-    let tail = planner.tail(layout.tail.0);
-    // Modules go after the tail, and the core exports are in it.
+    let tail = planner.tail(layout.tail);
+    let core_size = plan.core_size(layout.tail)?;
+    // Modules follow the aligned core payload span, including its gaps.
+    // The relocation check and the module start must use the same span.
     writeln!(result, "#define TAIL_SYMBOL {tail}U")?;
-    writeln!(
-        result,
-        "#define TAIL_BYTES {:#x}U",
-        layout.tail.1 - layout.tail.0
-    )?;
+    writeln!(result, "#define TAIL_BYTES {:#x}U", core_size)?;
     // The hooks that replace a branch: the private code calls its target.
     let mut targets = std::collections::BTreeMap::new();
     for patch in &plan.patches {
@@ -581,7 +593,7 @@ fn relocation_tables(
         relocation.windows.len(),
         relocation.symbols.len(),
         relocation::RADIUS,
-        layout.tail.1 - layout.tail.0,
+        core_size,
     )?;
     result.push_str("static u32 relocated[RELOCATION_SYMBOL_COUNT];\n");
     words(result, "patch_symbols", sites);

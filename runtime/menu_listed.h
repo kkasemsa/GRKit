@@ -35,6 +35,23 @@ static const Setting tone_settings[2]={
     {film_label,tone_rows,film_text,tone_committed,film_set},
     {adjustments_label,one_value,adjustments_text,no_value,no_set},
 };
+/* Group rows are links that show the value of the child's first setting.
+   The controller dispatcher opens the child's native settings page. */
+static const u16 *group_value(volatile u32 *h,u32 row) {
+    u32 child=group_child_address(h,row), value=setting_value(h,group_setting(h,row));
+    return MENU_TEXT(PAGE_WORD(PAGE_WORD(PAGE_WORD(child,PAGE_SETTING_LIST),ROW_VALUES),
+                               (value*GRKIT_TEXT_LANGUAGES+menu_language())*4));
+}
+#define GROUP_SETTING(n) \
+    static const u16 *group_label_##n(volatile u32 *h) { return group_label(h,n); } \
+    static const u16 *group_text_##n(volatile u32 *h,u32 value) { (void)value; return group_value(h,n); }
+GROUP_SETTING(0) GROUP_SETTING(1) GROUP_SETTING(2) GROUP_SETTING(3)
+static const Setting group_settings[SETTING_ROWS]={
+    {group_label_0,one_value,group_text_0,no_value,no_set},
+    {group_label_1,one_value,group_text_1,no_value,no_set},
+    {group_label_2,one_value,group_text_2,no_value,no_set},
+    {group_label_3,one_value,group_text_3,no_value,no_set},
+};
 /* The settings of the module page of the listed module after its Enable
    row, with menu_page selecting the page, and their count in *n; or 0. */
 static const Setting *listed_base(volatile u32 *h,u32 *n) {
@@ -42,6 +59,7 @@ static const Setting *listed_base(volatile u32 *h,u32 *n) {
     *n=0;
     if(listed_slot(h)>=module_pages(h)) return 0;
     page=menu_page(h,listed_slot(h));
+    if(page==&group_module) { *n=group_rows(h); return group_settings; }
     if(page==&tone_module) {
         /* Without a committed effect, there are no Fn adjustments. */
         *n=1;
@@ -141,6 +159,11 @@ static u32 listed_kind(volatile u32 *h,u32 row,const Setting **base) {
     row=row-1-options+first;
     return row<n ? row : LISTED_NONE;
 }
+static u32 listed_child(volatile u32 *h,u32 row) {
+    const Setting *base;
+    u32 kind=listed_kind(h,row,&base);
+    return base==group_settings && kind<LISTED_ENABLE ? group_child(h,kind) : MODULE_TOTAL;
+}
 static u32 listed_rows(volatile u32 *h) {
     u32 n, options;
     if(listed(h)>=manage_count(h)) return 0;
@@ -174,7 +197,7 @@ static u32 listed_get(volatile u32 *h,u32 row) {
 }
 static void listed_set(volatile u32 *h,u32 row,u32 value) {
     const Setting *b; u32 k=listed_kind(h,row,&b);
-    if(k==LISTED_ENABLE) { setting_store(h,manage_off_handle(h,listed(h)),value); manage_suspend(h); }
+    if(k==LISTED_ENABLE) { setting_store(h,manage_off_handle(h,listed(h)),value); manage_off_changed(h); }
     else if(k==LISTED_OPTIONS) {
         if(value<options_count(h)) option_set(h,value,!option_off(h,value));
         option_redraw(h,row,value);

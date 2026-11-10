@@ -8,10 +8,11 @@ The official modules in `modules/` are complete examples:
 | Folder | What it shows |
 | --- | --- |
 | `modules/guides` | an own setting, a choice page, and a layer |
-| `modules/framing` | a page and two layers of a capability, `CORE.ASPECT` |
-| `modules/date` | three settings, a page with a native settings page, and a plane filter |
-| `modules/grain` | a module with only data: a page of `CORE.GRAIN` with a row of `CORE.GRAIN_SIZE` |
-| `modules/film-look` | a page of `CORE.TONE`, whose rows the core gives |
+| `modules/framing` | a page, mask layer, and status icon of the capability `CORE.ASPECT` |
+| `modules/date` | three settings, a page, a status icon, and a plane filter |
+| `modules/glow` | independent Enable and Strength settings, strength icons shared by ADJ and the viewfinder, and a frame filter |
+| `modules/grain` | a module with only data: a page and status icon of `CORE.GRAIN` |
+| `modules/film-look` | a page of `CORE.TONE` and an indicator in the native Image Control position |
 
 ## Prerequisites
 
@@ -56,12 +57,15 @@ tiles = [
     "tiles/3-golden.png",
     "tiles/4-diagonals.png",
     "tiles/5-thirds-center.png",
+    "tiles/6-spiral.png",
+    "tiles/7-symmetry.png",
 ]
 
-# 0 Off, 1 thirds, 2 center, 3 golden ratio, 4 diagonals, 5 thirds and center.
+# 0 Off, 1 thirds, 2 center, 3 golden ratio, 4 diagonals, 5 thirds and center,
+# 6 golden spiral, 7 dynamic symmetry.
 [[settings]]
 key = "STYLE"
-values = 6
+values = 8
 saved = true
 public = true
 
@@ -77,11 +81,29 @@ follow_disp = true
 ```
 
 - `order`: the default place in ADJ and in MENU, after Film Look (10) and Framing (20).
-- `[[settings]]`: the setting `GUIDES.STYLE` has 6 values. The state file keeps it (`saved`), and other modules can use it (`public`).
+- `[[settings]]`: the setting `GUIDES.STYLE` has 8 values. The state file keeps it (`saved`), and other modules can use it (`public`).
 - `[page]`: a choice page of `STYLE` in ADJ and in MENU, with one row for each value.
 - `[[layers]]`: the core calls `guides_paint` for each draw of the live view while `STYLE` is not 0.
 
-A module can also use a setting of another module or a capability of the core, such as `uses = ["CORE.ASPECT"]`. A plane filter (`[[filters]]`) changes each recorded picture, as the date of `modules/date` does. A manifest must give at least one page, layer, or filter. See [module.toml](module-reference.md#moduletoml).
+A module can also use a setting of another module or a capability of the core, such as `uses = ["CORE.ASPECT"]`. A plane filter (`[[filters]]`) changes each recorded picture, as the date of `modules/date` does. A manifest must give at least one page, layer, indicator, filter, or event subscriber. See [module.toml](module-reference.md#moduletoml).
+
+## Add a viewfinder status icon
+
+An indicator declares its visibility and icon. The core handles its position, DISP visibility, and removal when disabled. It does not call module code to draw an indicator.
+
+```toml
+[[indicators]]
+id = "bloom"
+placement = "status_row"
+enabled = { setting = "BLOOM", not_equals = 0 }
+icon = { setting = "BLOOM", first_tile = 8 }
+```
+
+This example shows tiles 9, 10, and 11 for the strengths Weak, Medium, and Strong, values 1 to 3. The `enabled` condition hides the icon while Bloom is Off, value 0. The ADJ group child of Bloom shows the same values with its list tiles 1 to 4, Off included. Status-row icons are drawn for the live view, without a frame, and text uses the core live-view labels, as the Framing ratio does ([icon guidelines](icon-guidelines.md)).
+
+Use `status_row` for an additional icon. Use `native_slot` with `slot = "image_control"` to provide the native still-viewfinder icon, as Film Looks does. When that indicator is disabled, the core restores the current native icon. Guides needs no indicator because the lines already show its state.
+
+Indicators reflect committed settings. The status row shows only in the full-information still viewfinder. It does not appear in ADJ previews, video, or playback. An enabled icon does not mean that the effect has a live preview.
 
 ## Write the text and the tiles
 
@@ -89,7 +111,7 @@ A page has text in the five menu languages: `text/en.toml`, `text/zh-Hans.toml`,
 
 ```toml
 title = "Guides"
-rows = ["Off", "Thirds", "Center", "Golden Ratio", "Diagonals", "Thirds + Center"]
+rows = ["Off", "Thirds", "Center", "Golden Ratio", "Diagonals", "Thirds + Center", "Golden Spiral", "Dynamic Symmetry"]
 ```
 
 The tiles are 40 x 40 PNG files. Tile n shows value n of the page setting, and tile 0 is also the module tile.
@@ -184,4 +206,6 @@ period <number> frames <live-view frames>
 <MODULE> <paint|filter|call> <calls> <cycles> <cycles of the largest call>
 ```
 
-The core points are the live-view canvas (`frame.bind`, `frame.prepare`, `frame.paint`), the picture (`picture.post`, `picture.encode`, and on GR III `picture.grain`, the grain noise of a GRKit shot), and `menu.icon`. `picture.grain` counts microseconds instead of cycles. `frame.paint` includes the module layers, and `picture.encode` includes the plane filters. The profile counts the first eight modules of the list. The profile does not count the Image Control processing of each frame. It writes the card every 10 seconds, so do not use it to measure battery life.
+The core points include the live-view canvas (`frame.bind`, `frame.prepare`, `frame.paint`), the picture (`picture.post`, `picture.encode`), and `menu.icon`. On GR III, `picture.grain` measures the grain noise of a GRKit shot. `picture.grain` counts microseconds instead of cycles. `frame.paint` includes the module layers, and `picture.encode` includes the plane filters.
+
+The profile counts the first eight modules of the list. The profile does not count the Image Control processing of each frame. It writes the card every 10 seconds, so do not use it to measure battery life.

@@ -12,7 +12,7 @@ The text in the menu icons and in the live view uses the [Roboto Condensed](http
 
 The installation guide uses the [Noto Sans CJK](https://github.com/notofonts/noto-cjk) typefaces, which are licensed under the SIL Open Font License 1.1. Its code text uses DejaVu Sans Mono, which is licensed under the DejaVu Fonts License.
 
-The screenshot in the installation guide shows the photo [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/) by nagi usano, which is licensed under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). The photo is cropped and scaled, and the screenshot shows the GRKit menu and the Portra 400 effect over it.
+The screenshots in the README and the installation guide show the photo [Sakiko buys a delicious soup at Kitchen Grizzly](https://www.flickr.com/photos/mujitra/53311001084/) by MIKI Yoshihito, which is licensed under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). The photo is cropped and scaled, and the screenshot shows the GRKit menu and the Portra 400 effect over it.
 
 ## Effects
 
@@ -22,13 +22,13 @@ If an effect is not in the GRKit catalog, its author gives its license.
 
 ### spektrafilm
 
-Portra 400, Gold 200, Ektar 100, Pro 400H, Superia 400, Vision3 250D, Vision3 500T, Portra 800 +2, Kodachrome 64, Velvia 100, Provia 100F, Ektachrome E100, Fujicolor C200, and UltraMax 400 derive from LUTs of [spektrafilm](https://github.com/andreavolpato/spektrafilm) 0.3.4 by Andrea Volpato.
+Portra 400, Gold 200, Ektar 100, Pro 400H, Superia 400, Vision3 250D, Vision3 500T, Portra 800 +2, Kodachrome 64, Velvia 100, Ektachrome E100, Fujicolor C200, UltraMax 400, and Provia 100F derive from LUTs of [spektrafilm](https://github.com/andreavolpato/spektrafilm) 0.3.4 by Andrea Volpato.
 
 These effects are licensed under the [Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/) (CC BY-SA 4.0). The upstream notice is at <https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt>. The effects are provided as is, without warranty. Section 5 of the license gives the disclaimer.
 
 ### Spectral Film LUT
 
-Tri-X 400, Eterna 500T, Instax, and Double-X 5222 derive from LUTs of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse.
+Tri-X 400, Tri-X 400 Red, Aerocolor IV, Eterna 500T, Instax, and Double-X 5222 derive from LUTs of [Spectral Film LUT](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse.
 
 These effects are licensed under the MIT License. The copyright and permission notice is in "Spectral Film LUT license" below.
 

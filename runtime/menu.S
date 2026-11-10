@@ -144,6 +144,11 @@ menu_refresh_original:
 menu_changed_original:
     mov r12, sp
     ldr pc, =HOOK_MENU_CHANGED_RESUME
+.global menu_apply_original
+.type menu_apply_original, %function
+menu_apply_original:
+    mov r12, sp
+    ldr pc, =HOOK_MENU_APPLY_RESUME
 .ltorg
 #ifdef HOOK_MENU_ICON_WIDTH
 .global menu_icon_width
@@ -425,6 +430,10 @@ PARAMETER_GET 5, HOOK_MENU_PARAMETER_GET_5_RESUME
 PARAMETER_GET 6, HOOK_MENU_PARAMETER_GET_6_RESUME
 PARAMETER_GET 7, HOOK_MENU_PARAMETER_GET_7_RESUME
 PARAMETER_GET 8, HOOK_MENU_PARAMETER_GET_8_RESUME
+#ifdef HOOK_MENU_PARAMETER_GET_9_RESUME
+/* Toning, the row of PARAMETER_TONING_KIND (runtime/toning.h). */
+PARAMETER_GET 9, HOOK_MENU_PARAMETER_GET_9_RESUME
+#endif
 .ltorg
 PARAMETER_SET 0, HOOK_MENU_PARAMETER_SET_0_RESUME
 PARAMETER_SET 1, HOOK_MENU_PARAMETER_SET_1_RESUME
@@ -435,6 +444,9 @@ PARAMETER_SET 5, HOOK_MENU_PARAMETER_SET_5_RESUME
 PARAMETER_SET 6, HOOK_MENU_PARAMETER_SET_6_RESUME
 PARAMETER_SET 7, HOOK_MENU_PARAMETER_SET_7_RESUME
 PARAMETER_SET 8, HOOK_MENU_PARAMETER_SET_8_RESUME
+#ifdef HOOK_MENU_PARAMETER_SET_9_RESUME
+PARAMETER_SET 9, HOOK_MENU_PARAMETER_SET_9_RESUME
+#endif
 .ltorg
 
 /* Replace the BL to the native value read of a list row of the page. The
@@ -463,6 +475,9 @@ PARAMETER_ROW 5, HOOK_MENU_PARAMETER_ROW_5_TARGET
 PARAMETER_ROW 6, HOOK_MENU_PARAMETER_ROW_6_TARGET
 PARAMETER_ROW 7, HOOK_MENU_PARAMETER_ROW_7_TARGET
 PARAMETER_ROW 8, HOOK_MENU_PARAMETER_ROW_8_TARGET
+#ifdef HOOK_MENU_PARAMETER_ROW_9_TARGET
+PARAMETER_ROW 9, HOOK_MENU_PARAMETER_ROW_9_TARGET
+#endif
 .ltorg
 
 /* The page start method. r0 = the page. */
@@ -529,8 +544,7 @@ parameter_event_resume:
 .type menu_settings_change, %function
 menu_settings_change:
     push {r0-r3, r12, lr}
-    mov r0, r1
-    bl menu_settings_controller
+    bl menu_settings_transition
     /* The C function gives the controller to change to, in r1, or 0: no
        change happens. */
     cmp r0, #0
@@ -612,12 +626,39 @@ menu_info_after:
 .endm
 SETTINGS_KINDS_SAVED menu_settings_kinds_r3_0, 3
 SETTINGS_KINDS_SAVED menu_settings_kinds_r2, 2
-SETTINGS_KINDS_REGISTER menu_settings_kinds_r8, r8
 SETTINGS_KINDS_REGISTER menu_settings_kinds_r5, r5
-SETTINGS_KINDS_SAVED menu_settings_kinds_r3_1, 3
+/* The title of a submenu page: r0 holds its string view, which the next
+   call sets to the title ID of the kind entry. The C function resets the
+   view first. The base goes to the saved r3. */
+.global menu_settings_kinds_r3_1
+.type menu_settings_kinds_r3_1, %function
+menu_settings_kinds_r3_1:
+    push {r0-r3, r12, lr}
+    mrs r1, cpsr
+    push {r1, r2}
+    bl menu_settings_title
+    bl menu_settings_kinds
+    str r0, [sp, #8+4*3]
+    pop {r1, r2}
+    msr APSR_nzcvq, r1
+    pop {r0-r3, r12, pc}
+/* The base in the draw, which has loaded its row list into r6: the C function
+   also fits the rows of a GRKit page to the views of the list. */
+.global menu_settings_kinds_r8
+.type menu_settings_kinds_r8, %function
+menu_settings_kinds_r8:
+    push {r0-r3, r12, lr}
+    mrs r0, cpsr
+    push {r0, r1}
+    mov r0, r6
+    bl menu_settings_kinds_draw
+    mov r8, r0
+    pop {r0, r1}
+    msr APSR_nzcvq, r0
+    pop {r0-r3, r12, pc}
 
-/* The submenu has GRKIT_SUBMENU_ROWS row views instead of five (core.h:
-   SUBMENU_ROWS). Its constructor builds the list from five row types on the
+/* A submenu built after INSTALL has GRKIT_SUBMENU_ROWS row views instead of
+   five (core.h: SUBMENU_ROWS). Its constructor builds the list from five row types on the
    stack, and the stack guard follows at fp - 0x18: the stub replaces the
    store of the fifth and gives the list the types of menu_settings_types. */
 .global menu_settings_build
@@ -627,18 +668,26 @@ menu_settings_build:
     mov r2, #GRKIT_SUBMENU_ROWS
     bx lr
 .ltorg
-/* The draw hides the rows from the row count to the last view: the two
-   compares with the last row. */
-.global menu_settings_hide_first
-.type menu_settings_hide_first, %function
-menu_settings_hide_first:
-    cmp r7, #GRKIT_SUBMENU_ROWS-1
+/* The draw hides the rows from the row count to the last view of its list
+   (r6): the two compares with the last row. The last view comes from the list,
+   because a submenu that the firmware built before INSTALL has five views
+   (menu_settings_kinds_draw). Only the flags change. */
+.macro SETTINGS_LAST_VIEW name, register
+.global \name
+.type \name, %function
+\name:
+    push {r0, r1}
+    ldr r0, [r6, #LIST_ROWS]
+    ldr r1, [r6, #LIST_ROWS+4]
+    sub r1, r1, r0
+    lsr r1, r1, #2
+    sub r1, r1, #1
+    cmp \register, r1
+    pop {r0, r1}
     bx lr
-.global menu_settings_hide_next
-.type menu_settings_hide_next, %function
-menu_settings_hide_next:
-    cmp r4, #GRKIT_SUBMENU_ROWS-1
-    bx lr
+.endm
+SETTINGS_LAST_VIEW menu_settings_hide_first, r7
+SETTINGS_LAST_VIEW menu_settings_hide_next, r4
 /* The kind of row r4 from the kind table (r8 its base, r3 the word index of
    the kind). The entry has room for the kinds of five rows: a later row
    takes the kind of the first, whose word index is r3 - r4. */
@@ -730,3 +779,101 @@ SETTINGS_METHOD menu_settings_draw_4, menu_settings_draw, 4, HOOK_MENU_SETTINGS_
 SETTINGS_METHOD menu_settings_apply_4, menu_settings_apply, 4, HOOK_MENU_SETTINGS_APPLY_4_STOCK, HOOK_MENU_SETTINGS_APPLY_4_RESUME
 SETTINGS_METHOD menu_settings_current_4, menu_settings_current, 4, HOOK_MENU_SETTINGS_CURRENT_4_STOCK, HOOK_MENU_SETTINGS_CURRENT_4_RESUME
 .ltorg
+
+#ifdef HOOK_MENU_DEVELOP_COUNT
+/* The Image Control list of a RAW development (runtime/menu.c). Each entry
+   hook replaces the first instruction of its function. */
+/* GetListItemCount: run it, then add the effects to the Image Control list. */
+.global menu_develop_count
+.type menu_develop_count, %function
+menu_develop_count:
+    push {r0,lr}
+    adr lr, 1f
+    mov ip, sp
+    ldr pc, =HOOK_MENU_DEVELOP_COUNT_RESUME
+1:  pop {r1,lr}
+    b menu_develop_count_after
+/* An entry that menu.c answers for an effect row: menu.c returns the value,
+   or -1 to run the native function from its second instruction. */
+.macro DEVELOP_ANSWER name, helper, first, resume
+.global \name
+.type \name, %function
+\name:
+    push {r0-r3,r12,lr}
+    bl \helper
+    cmn r0, #1
+    beq 1f
+    add sp, sp, #4
+    pop {r1-r3,r12,lr}
+    bx lr
+1:  pop {r0-r3,r12,lr}
+    \first
+    ldr pc, =\resume
+.endm
+DEVELOP_ANSWER menu_develop_category, menu_develop_category_answer, DEVELOP_CATEGORY_FIRST, HOOK_MENU_DEVELOP_CATEGORY_RESUME
+DEVELOP_ANSWER menu_develop_value, menu_develop_value_answer, "mov ip, sp", HOOK_MENU_DEVELOP_VALUE_RESUME
+DEVELOP_ANSWER menu_develop_row, menu_develop_row_answer, "mov ip, sp", HOOK_MENU_DEVELOP_ROW_RESUME
+DEVELOP_ANSWER menu_develop_current, menu_develop_current_answer, "mov ip, sp", HOOK_MENU_DEVELOP_CURRENT_RESUME
+DEVELOP_ANSWER menu_develop_fn, menu_develop_fn_answer, "mov ip, sp", HOOK_MENU_DEVELOP_FN_RESUME
+/* An entry that menu.c sees first, then the native function runs. */
+.macro DEVELOP_BEFORE name, helper, resume
+.global \name
+.type \name, %function
+\name:
+    push {r0-r3,r12,lr}
+    bl \helper
+    pop {r0-r3,r12,lr}
+    mov ip, sp
+    ldr pc, =\resume
+.endm
+DEVELOP_BEFORE menu_develop_decide, menu_develop_choose, HOOK_MENU_DEVELOP_DECIDE_RESUME
+DEVELOP_BEFORE menu_develop_open, menu_develop_opened, HOOK_MENU_DEVELOP_OPEN_RESUME
+/* The BL to the model restore at Cancel. */
+.global menu_develop_restore
+.type menu_develop_restore, %function
+menu_develop_restore:
+    push {r0-r3,r12,lr}
+    bl menu_develop_restored
+    pop {r0-r3,r12,lr}
+    ldr pc, =HOOK_MENU_DEVELOP_RESTORE_TARGET
+/* The BLs to the label (model, category, value) of the subtitles: r3 gets
+   the subtitle view. */
+.global menu_develop_list_text
+.type menu_develop_list_text, %function
+menu_develop_list_text:
+    DEVELOP_LIST_TITLE
+    b menu_develop_label
+.global menu_develop_top_text
+.type menu_develop_top_text, %function
+menu_develop_top_text:
+    DEVELOP_TOP_TITLE
+    b menu_develop_label
+.ltorg
+#ifdef HOOK_MENU_DEVELOP_ASPECT_VALUE
+/* The aspect list of a RAW development (runtime/menu.c): the entry of the
+   row value of the model, the entry of the choice of a row, the BL to the
+   model restore at Cancel, and the BLs to the label (model, value) of an
+   aspect in the subtitles. The BL to the icon of an aspect in the rows of
+   RawDevelopmentTopController goes to menu_develop_aspect_top_icon (C). */
+DEVELOP_ANSWER menu_develop_aspect_value, menu_develop_aspect_value_answer, DEVELOP_ASPECT_VALUE_FIRST, HOOK_MENU_DEVELOP_ASPECT_VALUE_RESUME
+DEVELOP_BEFORE menu_develop_aspect_decide, menu_develop_aspect_choose, HOOK_MENU_DEVELOP_ASPECT_DECIDE_RESUME
+.global menu_develop_aspect_restore
+.type menu_develop_aspect_restore, %function
+menu_develop_aspect_restore:
+    push {r0-r3,r12,lr}
+    bl menu_develop_aspect_restored
+    pop {r0-r3,r12,lr}
+    ldr pc, =HOOK_MENU_DEVELOP_ASPECT_RESTORE_TARGET
+.global menu_develop_aspect_list_text
+.type menu_develop_aspect_list_text, %function
+menu_develop_aspect_list_text:
+    DEVELOP_LIST_TITLE
+    b menu_develop_aspect_label
+.global menu_develop_aspect_top_text
+.type menu_develop_aspect_top_text, %function
+menu_develop_aspect_top_text:
+    DEVELOP_TOP_TITLE
+    b menu_develop_aspect_label
+.ltorg
+#endif
+#endif

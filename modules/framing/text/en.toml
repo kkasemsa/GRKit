@@ -6,10 +6,14 @@ summaries = ["Off", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "7:6"]
 [settings."CORE.ASPECT"]
 label = "Aspect Ratio"
 
+[settings."CORE.ASPECT_MODE"]
+label = "Mode"
+values = ["Crop", "Guides Only"]
+
 [settings.MASK]
 label = "Mask"
 values = ["Dark", "Black", "Frame Lines"]
 
 [settings.LABEL]
-label = "Ratio Label"
+label = "Show Icon"
 values = ["On", "Off"]

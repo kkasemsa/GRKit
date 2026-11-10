@@ -62,6 +62,23 @@ static volatile u32 *settings_block(volatile u32 *h) { return SETTINGS_MAP(GRKIT
    that a row of the page opened show (menu_settings_controller). */
 #define SETTINGS_ONE 0x10000U
 #define SETTINGS_FN 0x20000U
+/* A child opened from a module in MENU returns to that module page. */
+#define SETTINGS_PARENT 0x40000U
+#define MENU_GROUP_TARGET 0x2000f60U
+#define MENU_RETURN_CONTROLLER 0x200004aU
+/* The MENU controller that a module page returns to, as the submenu holds
+   it (settings_note_return): the ID differs between the cameras.
+   MENU_RETURN_CONTROLLER, the one of GR III, serves until a change from a
+   page of MENU. */
+static u32 menu_return(volatile u32 *h) {
+    u32 id=h[GRKIT_HOST_SERVICES/4] ? services_word(h,SERVICES_MENU+MENU_ROWS_RETURN)[0] : 0;
+    return id ? id : MENU_RETURN_CONTROLLER;
+}
+/* BaseController fields shared by the four supported firmware builds. Back
+   sets the flag before ChangeController; its asynchronous completion clears
+   the old instance's return target when that flag is still set. */
+#define SETTINGS_RETURN_TARGET 0x150U
+#define SETTINGS_BACK_PENDING 0x154U
 /* The row past SETTINGS_BORROWED whose value page SETTINGS_ALIAS shows, or
    0: bits 24 to 31. */
 #define SETTINGS_OPEN_ROW 24U
@@ -70,6 +87,7 @@ static volatile u32 *settings_block(volatile u32 *h) { return SETTINGS_MAP(GRKIT
 /* The settings of page `module`, or 0. */
 static const Setting *settings_of(volatile u32 *h,u32 module,u32 one) {
     if(module==LISTED_PAGE) return listed_settings;
+    if(module==SWITCH_MODULE) return switch_settings;
     if(module>=MODULE_TOTAL) return 0;
     if(one) { menu_page(h,module); return choice_one; }
     return menu_page(h,module)->settings;
@@ -98,10 +116,11 @@ static u32 settings_alias(volatile u32 *h,u32 page) {
 /* The borrowed page that shows the value page of row `row`. */
 static u32 settings_borrowed(u32 row) { return row<SETTINGS_BORROWED ? row : SETTINGS_ALIAS; }
 /* Whether row `setting` of the open page is long: its value page keeps each
-   value in an entry (value_entry), up to VALUES_MAX values. An Options row
-   is long, and a row with more values than the value slots, such as Film
-   Stock. */
-#define VALUES_MAX MENU_VALUES_MAX
+   value in an entry (value_entry), up to MENU_VALUES_MAX values. An Options
+   row is long, and a row with more values than the value slots, such as Film
+   Stock. A long value page shows on an own controller with a row view for
+   each value (menu_check_controller). */
+_Static_assert(GRKIT_TEXT_RECORDS+1<=MENU_VALUES_MAX,"Film Stock shows Off and each effect");
 static u32 settings_options(volatile u32 *h,const Setting *page,u32 setting) {
     const Setting *b;
     return page==listed_settings && listed_kind(h,setting,&b)==LISTED_OPTIONS;
@@ -109,42 +128,90 @@ static u32 settings_options(volatile u32 *h,const Setting *page,u32 setting) {
 static u32 settings_long(volatile u32 *h,const Setting *page,u32 setting) {
     return settings_options(h,page,setting) || page[setting].values(h)>SETTING_VALUES;
 }
+/* Each SelectMenu of the camera shares one SelectMenuController. Its
+   constructor builds a radio row view for each row of the longest native
+   kind (SELECT_MENU_ROWS), maybe before INSTALL. A long value page shows on
+   an own controller instead: the controller factory gives the open long
+   value page (CHECK_ID) the checkbox page for an options page, else the
+   radio page. Each is built once, with checkbox rows (CheckBoxListLineView)
+   or radio rows, and the list init of the constructor appends rows: the
+   factory appends more until the page has a row view for each value. So
+   each native list keeps its own rows. */
+static volatile u32 *check_word(volatile u32 *h,u32 at) { return services_word(h,SERVICES_CHECK+at); }
+static volatile u32 *check_list(volatile u32 *h,u32 which) { return check_word(h,CHECK_LISTS+which*8); }
+static u32 check_row(u32 line) { return line && MENU_OBJECT_WORD(line,0)==CHECK_LINE_VTABLE; }
+/* The row views that the value page of row `setting` has: those of the own
+   page that shows it, or the rows of the shared controller. */
+static u32 settings_long_rows(volatile u32 *h,u32 setting) {
+    u32 which;
+    if(!h[GRKIT_HOST_SERVICES/4] || !check_word(h,CHECK_ID)[0] || check_word(h,CHECK_SETTING)[0]!=setting)
+        return SELECT_MENU_ROWS;
+    which=settings_options(h,settings_page(h),setting) ? CHECK_PAGE_CHECKBOX : CHECK_PAGE_RADIO;
+    return check_word(h,which==CHECK_PAGE_RADIO ? CHECK_RADIO : CHECK_PAGE)[0] ? check_list(h,which)[1] : SELECT_MENU_ROWS;
+}
 static u32 settings_values(volatile u32 *h,const Setting *page,u32 setting) {
-    u32 n=page[setting].values(h), most=settings_long(h,page,setting) ? VALUES_MAX : SETTING_VALUES;
+    u32 n=page[setting].values(h), most=SETTING_VALUES;
+    if(settings_long(h,page,setting)) {
+        most=settings_long_rows(h,setting);
+        if(most>MENU_VALUES_MAX) most=MENU_VALUES_MAX;
+    }
     return n<most ? n : most;
 }
 static void settings_forget_all(volatile u32 *h);
-/* An options page shows a checkbox on each option. Each SelectMenu of the
-   camera shares one SelectMenuController, built once with radio rows. The
-   controller factory gives the open options page (CHECK_ID) a second one,
-   built once with checkbox rows (CheckBoxListLineView), so each native list
-   keeps its radio rows. */
-static volatile u32 *check_word(volatile u32 *h,u32 at) { return services_word(h,SERVICES_CHECK+at); }
-static u32 check_row(u32 line) { return line && MENU_OBJECT_WORD(line,0)==CHECK_LINE_VTABLE; }
-/* The controller of `id` (menu.S: menu_check_factory): the checkbox page for
-   the open options page, else 0 for the native one. */
+/* Append rows to page `which` until it has `need` row views. */
+static void check_rows(volatile u32 *h,u32 which,u32 need) {
+    volatile u32 *list=check_list(h,which);
+    u8 types[MENU_VALUES_MAX];
+    u32 i,add;
+    if(need>MENU_VALUES_MAX) need=MENU_VALUES_MAX;
+    if(!list[0] || list[1]>=need) return;
+    add=need-list[1];
+    for(i=0;i<add;++i)
+        types[i]=(u8)(which==CHECK_PAGE_RADIO ? check_word(h,CHECK_RADIO_TYPE)[0] : CHECK_LINE_TYPE);
+    MENU_VIEW4(FW_LIST_INIT,list[0],(u32)types,add,check_word(h,CHECK_HEIGHT)[0]);
+    list[1]=need;
+}
+/* The controller of `id` (menu.S: menu_check_factory): the own page of the
+   open long value page, else 0 for the native one. */
 A32_ENTRY u32 menu_check_controller(u32 factory,u32 id) {
     volatile u32 *h=menu_header();
-    u32 page;
+    const Setting *page;
+    u32 which,setting,controller;
+    volatile u32 *slot;
     (void)factory;
     if(!h[GRKIT_HOST_SERVICES/4] || !id || id!=check_word(h,CHECK_ID)[0]) return 0;
-    page=check_word(h,CHECK_PAGE)[0];
-    if(page) return page;
-    page=MENU_VIEW1(FW_ALLOCATE,SELECT_MENU_SIZE);
-    if(!page) return 0;
-    check_word(h,CHECK_BUILD)[0]=1;
-    MENU_VIEW1(FW_SELECT_MENU_NEW,page);
-    check_word(h,CHECK_BUILD)[0]=0;
-    check_word(h,CHECK_PAGE)[0]=page;
-    return page;
+    page=settings_page(h);
+    setting=check_word(h,CHECK_SETTING)[0];
+    if(!page || setting>=settings_rows(h)) return 0;
+    which=settings_options(h,page,setting) ? CHECK_PAGE_CHECKBOX : CHECK_PAGE_RADIO;
+    slot=check_word(h,which==CHECK_PAGE_RADIO ? CHECK_RADIO : CHECK_PAGE);
+    controller=slot[0];
+    if(!controller) {
+        controller=MENU_VIEW1(FW_ALLOCATE,SELECT_MENU_SIZE);
+        if(!controller) return 0;
+        check_word(h,CHECK_BUILD)[0]=1+which;
+        MENU_VIEW1(FW_SELECT_MENU_NEW,controller);
+        check_word(h,CHECK_BUILD)[0]=0;
+        slot[0]=controller;
+    }
+    check_rows(h,which,page[setting].values(h));
+    return controller;
 }
-/* The rows of a SelectMenuController list: checkbox rows while the checkbox
-   page is built. */
+/* The rows of a SelectMenuController list: while an own page is built, its
+   list, its rows, and the row height, with checkbox rows for the checkbox
+   page. */
 A32_ENTRY void menu_check_lines(u32 list,u32 types,u32 count,u32 height) {
     volatile u32 *h=menu_header();
-    u32 i;
-    if(h[GRKIT_HOST_SERVICES/4] && check_word(h,CHECK_BUILD)[0])
-        for(i=0;i<count;++i) MENU_OBJECT_BYTE(types,i)=CHECK_LINE_TYPE;
+    u32 i,build=h[GRKIT_HOST_SERVICES/4] ? check_word(h,CHECK_BUILD)[0] : 0;
+    if(build) {
+        volatile u32 *at=check_list(h,build-1);
+        if(build-1==CHECK_PAGE_CHECKBOX)
+            for(i=0;i<count;++i) MENU_OBJECT_BYTE(types,i)=CHECK_LINE_TYPE;
+        else if(count) check_word(h,CHECK_RADIO_TYPE)[0]=MENU_OBJECT_BYTE(types,0);
+        check_word(h,CHECK_HEIGHT)[0]=height;
+        at[0]=list;
+        at[1]=count;
+    }
     MENU_VIEW4(FW_LIST_INIT,list,types,count,height);
 }
 /* The start shows the radio dot of the current value only: a checkbox row
@@ -166,15 +233,18 @@ A32_ENTRY u32 menu_settings_controller(u32 id) {
     }
     id=menu_rows_controller(h,id);
     menu_parameter_controller(h,id);
-    /* The checkbox page serves the options page that opens now. The return
-       to the settings page keeps it, as the submenu finds the row to put
-       its cursor on from the page that returns. Any other controller gets
-       the native one. */
+    /* An own page serves the long value page that opens now. The return to
+       the settings page keeps it, as the submenu finds the row to put its
+       cursor on from the page that returns. Any other controller gets the
+       native one. */
     if(h[GRKIT_HOST_SERVICES/4] && id!=SETTINGS_SUBMENU) {
         check_word(h,CHECK_ID)[0]=0;
         for(i=0;i<SETTINGS_BORROWED;++i)
             if(id==settings_pages[i] && settings_page(h) && settings_alias(h,i)<settings_rows(h) &&
-               settings_options(h,settings_page(h),settings_alias(h,i))) check_word(h,CHECK_ID)[0]=id;
+               settings_long(h,settings_page(h),settings_alias(h,i))) {
+                check_word(h,CHECK_ID)[0]=id;
+                check_word(h,CHECK_SETTING)[0]=settings_alias(h,i);
+            }
     }
     /* The section title of MENU needs the controller that shows. The camera
        information page shows About GRKit only after the About GRKit row. */
@@ -188,8 +258,11 @@ A32_ENTRY u32 menu_settings_controller(u32 id) {
         /* The page shows its rows and labels again on each start, as a value
            page can change them: Film Stock adds Parameters once an effect is
            committed, and an ADJ Order choice moves the modules. */
-        if(settings_page(h))
+        if(settings_page(h)) {
+            u32 parent=h[GRKIT_HOST_SETTINGS/4]&SETTINGS_PARENT;
             settings_open(h,(h[GRKIT_HOST_SETTINGS/4]&0xffffU)-1,h[GRKIT_HOST_SETTINGS/4]&SETTINGS_ONE);
+            h[GRKIT_HOST_SETTINGS/4]|=parent;
+        }
         return id;
     }
     for(i=0;i<SETTINGS_BORROWED;++i) if(id==settings_pages[i]) {
@@ -205,6 +278,51 @@ A32_ENTRY u32 menu_settings_controller(u32 id) {
     if((id==IC_PARAMETERS_CONTROLLER || (id==SHOOTING_CONTROLLER && menu_parameter_session())) &&
        h[GRKIT_HOST_SETTINGS/4]&SETTINGS_FN) return id;
     h[GRKIT_HOST_SETTINGS/4]=0;
+    /* A native page that GRKit opened from ADJ returns to GRKit at the next
+       ADJ (RETURN_PARAMETERS). The page, the shooting screen of a half-press,
+       and ADJ keep that return. Any other screen, such as playback or MENU,
+       ends it, so the next ADJ opens as a native ADJ does and its Fn works. */
+    if(RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_PARAMETERS && id!=ADJ_CONTROLLER &&
+       id!=IC_PARAMETERS_CONTROLLER && id!=SHOOTING_CONTROLLER) h[GRKIT_HOST_RETURN/4]=0;
+    return id;
+}
+/* A MENU group and its child reuse the same SubMenuController instance.
+   Native Back would clear that instance's return target after starting the
+   parent, leaving its next MENU press with nowhere to go. Treat only this
+   self transition as a fresh start and restore the parent's top-level MENU
+   target. ADJ and value-page returns keep their native Back semantics. */
+/* A change from the submenu while it shows a page of MENU: keep the MENU
+   controller that the submenu returns to (menu_return). A page that ADJ
+   opened returns to ADJ, and a child to its parent, which is the submenu. */
+static void settings_note_return(volatile u32 *h,u32 controller) {
+    u32 module=h[GRKIT_HOST_SETTINGS/4]&0xffffU, target;
+    if(!controller || !h[GRKIT_HOST_SERVICES/4] ||
+       services_word(h,SERVICES_MENU+MENU_ROWS_CURRENT)[0]!=SETTINGS_SUBMENU) return;
+    if(module!=LISTED_PAGE+1 && !(h[GRKIT_HOST_SETTINGS/4]&SETTINGS_PARENT)) return;
+    target=MENU_OBJECT_WORD(controller,SETTINGS_RETURN_TARGET);
+    /* The targets of GRKit rows (0x2000f00 and later) are no controller. */
+    if(target>>12!=SETTINGS_SUBMENU>>12 || (target&0xf00U)==0xf00U || settings_shows(target) ||
+       target==ADJ_CONTROLLER || target==IC_PARAMETERS_CONTROLLER) return;
+    services_word(h,SERVICES_MENU+MENU_ROWS_RETURN)[0]=target;
+}
+/* `arg` is the third argument of ChangeController (CONTROLLER_BACK for a
+   return to the previous controller). */
+A32_ENTRY u32 menu_settings_transition(u32 controller,u32 id,u32 arg) {
+    volatile u32 *h=menu_header();
+    u32 parent_back;
+    settings_note_return(h,controller);
+    parent_back=controller && h[GRKIT_HOST_SERVICES/4] &&
+        (id==SETTINGS_SUBMENU || id==menu_return(h)) &&
+        (h[GRKIT_HOST_SETTINGS/4]&SETTINGS_PARENT) &&
+        services_word(h,SERVICES_MENU+MENU_ROWS_CURRENT)[0]==SETTINGS_SUBMENU &&
+        MENU_OBJECT_BYTE(controller,SETTINGS_BACK_PENDING);
+    id=menu_settings_controller(id);
+    /* ADJ opens after INSTALL: it opens GRKit (RETURN_POWERON). */
+    h[GRKIT_HOST_RETURN/4]=controller_return(h[GRKIT_HOST_RETURN/4],id,arg);
+    if(parent_back && id==SETTINGS_SUBMENU) {
+        MENU_OBJECT_BYTE(controller,SETTINGS_BACK_PENDING)=0;
+        MENU_OBJECT_WORD(controller,SETTINGS_RETURN_TARGET)=menu_return(h);
+    }
     return id;
 }
 /* The kind table that the submenu reads: the private entry at the index of
@@ -213,6 +331,32 @@ A32_ENTRY u32 menu_settings_kinds(void) {
     volatile u32 *h=menu_header();
     if(!settings_page(h)) return FW_SUBMENU_KINDS;
     return (u32)settings_block(h)-SETTINGS_SUBMENU_KIND*SUBMENU_KIND_SIZE;
+}
+/* The title view of a submenu page, before the page sets its title
+   (menu.S: menu_settings_kinds_r3_1). The title setter sets the text ID of
+   its string view (SUBMENU_TITLE_STRING), which measures its text only when
+   the ID changes. Each GRKit page has the title ID of the borrowed entry
+   (SETTINGS_TITLE_TEXT), so a longer title was cut to the width of the title
+   before it. Reset the string view, as the Fn page does with its title
+   (runtime/menu.c: menu_parameter_page_kinds). */
+A32_ENTRY void menu_settings_title(u32 view) {
+    u32 string=view ? MENU_OBJECT_WORD(view,SUBMENU_TITLE_STRING) : 0;
+    if(string) MENU_VIEW3(FW_STRING_VIEW_RESET,string,0,0);
+}
+/* The kind table of the submenu draw, whose row list is `list`. The firmware
+   builds one submenu and keeps it until power-off. A submenu that it built
+   before INSTALL has the five row views of the stock constructor, not
+   SUBMENU_ROWS (menu.S: menu_settings_build). So a page shows at most the
+   rows that the list has views for: the draw, Down, and OK read the row count
+   of the entry, and no row past the views of the list. */
+A32_ENTRY u32 menu_settings_kinds_draw(u32 list) {
+    volatile u32 *h=menu_header();
+    if(settings_page(h)) {
+        volatile u8 *rows=(volatile u8 *)settings_block(h)+SUBMENU_KIND_ROWS;
+        u32 views=list_capacity(list);
+        if(*rows>views) *rows=(u8)views;
+    }
+    return menu_settings_kinds();
 }
 /* The text hook finds the text of a view by its address. The native menu
    frees its views at each page change and reuses their addresses, so a view
@@ -426,7 +570,7 @@ A32_ENTRY u32 menu_settings_current(u32 value,u32 unused,u32 setting) {
 static u32 settings_count(volatile u32 *h,const Setting *page) {
     u32 n=0;
     if(page==choice_settings) n=PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS);
-    else if(page==manage_settings) n=manage_count(h);
+    else if(page==manage_settings) n=manage_adj_count(h);
     else if(page==listed_settings) n=listed_rows(h);
     else while(n<SETTING_ROWS && page[n].label) ++n;
     return n<SUBMENU_ROWS ? n : SUBMENU_ROWS;
@@ -440,8 +584,12 @@ static void settings_open(volatile u32 *h,u32 module,u32 one) {
         menu_settings_value_2,menu_settings_value_3,menu_settings_value_4,menu_settings_value_5,
         menu_settings_value_6,menu_settings_value_7,menu_settings_value_8,menu_settings_value_9};
     volatile u32 *block=settings_block(h);
-    const Setting *page=settings_of(h,module,one);
-    u32 stock=FW_SUBMENU_KINDS+SETTINGS_SUBMENU_KIND*SUBMENU_KIND_SIZE, i, rows=page ? settings_count(h,page) : 0;
+    const Setting *page;
+    u32 stock=FW_SUBMENU_KINDS+SETTINGS_SUBMENU_KIND*SUBMENU_KIND_SIZE, i, rows;
+    /* ADJ Order lists the modules that ADJ shows now. */
+    if(module==MANAGE_MODULE) manage_adj_refresh(h);
+    page=settings_of(h,module,one);
+    rows=page ? settings_count(h,page) : 0;
     for(i=0;i<SUBMENU_KIND_SIZE/4;++i) block[i]=MENU_OBJECT_WORD(stock,i*4);
     ((volatile u8 *)block)[SUBMENU_KIND_ROWS]=(u8)rows;
     _Static_assert(sizeof(values)/sizeof(values[0])==SUBMENU_ROWS,"A value method for each row");
@@ -453,6 +601,8 @@ static void settings_open(volatile u32 *h,u32 module,u32 one) {
         if(i<SETTINGS_BORROWED) {
             block[SUBMENU_KIND_CONTROLLERS/4+i]=settings_pages[i];
             if(settings_fn_row(h,page,i)) block[SUBMENU_KIND_CONTROLLERS/4+i]=MENU_FN_TARGET;
+            if(page==listed_settings && listed_child(h,i)<module_pages(h))
+                block[SUBMENU_KIND_CONTROLLERS/4+i]=MENU_GROUP_TARGET+i;
             /* The stock entry has three rows: the others take the kind of the first. */
             block[SUBMENU_KIND_ROW_KINDS/4+i]=block[SUBMENU_KIND_ROW_KINDS/4];
         }
@@ -467,7 +617,7 @@ static void settings_open(volatile u32 *h,u32 module,u32 one) {
                    manage_name(h,listed(h)));
     else
     descriptor(block+SETTINGS_LABELS/4,module==MANAGE_MODULE ? manage_title(h) :
-               menu_page(h,module)->title(h));
+               module==SWITCH_MODULE ? grkit_title : menu_page(h,module)->title(h));
     for(i=0;i<SETTINGS_VIEW_SLOTS*3;++i) block[SETTINGS_VIEWS/4+i]=0;
     h[GRKIT_HOST_SETTINGS/4]=(module+1)|(one ? SETTINGS_ONE : 0);
 }

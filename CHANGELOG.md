@@ -1,3 +1,104 @@
+## 1.5.4 (2026-11-10)
+
+### Fixes
+
+- ADJ opens on GRKit after power-off when ADJ closed there last time, and on the same module row.
+- With the fast-boot firmware, GRKit reads fewer files at each start, so it loads faster.
+
+## 1.5.3 (2026-11-09)
+
+### Fixes
+
+- GRKit loads faster after power-on, most with the fast-boot firmware.
+
+## 1.5.2 (2026-11-08)
+
+### Fixes
+
+- With the fast-boot firmware, GRKit still loads when the fast start fails, instead of showing an error.
+- Guides adds a golden spiral and dynamic symmetry, and in ADJ, Fn turns the spiral to the next corner.
+
+## 1.5.1 (2026-11-07)
+
+### Fixes
+
+- Bloom and Halation at Strong now glow visibly around lamps indoors and at dusk.
+- In in-camera RAW Development, Fn on a Film Look adjusts its settings for that picture, as it does for a native Image Control.
+- On the site, Edit changes the name and the icon of an imported LUT film look, without a new import.
+
+## 1.5.0 (2026-11-06)
+
+### Features
+
+- With the optional fast-boot firmware, which grkit.app makes from the official firmware, GRKit loads soon after power-on.
+
+### Fixes
+
+- With Bloom and Halation both on, bright areas such as a sky or a screen no longer show rectangular patches with some Film Looks.
+
+## 1.4.4 (2026-11-06)
+
+### Fixes
+
+- Photos with a Film Look now use the Shading and Clarity of its Fn adjustments, and no longer take the Shading, Clarity, or grain of the native Image Control, such as the grain of Hi-Contrast B&W.
+
+## 1.4.3 (2026-11-05)
+
+### Fixes
+
+- On GR IV, MENU on the Glow page after Bloom or Halation returns to the GRKit section instead of playback.
+
+## 1.4.2 (2026-11-05)
+
+### Fixes
+
+- In ADJ, Glow shows its name before its value, for example "Glow: Off", as the other modules do.
+- Choose the color of Halation: Red, Orange, Gold, or White.
+- GR IV Monochrome no longer loads Film Look, whose effects are made for color sensors.
+
+## 1.4.1 (2026-11-04)
+
+### Fixes
+
+- Photos with Grain or Date Imprint save faster, most of all upright date stamps on portrait photos.
+- In Guides Only mode, guides now line up with the composition frame instead of crossing the dark area outside it.
+
+## 1.4.0 (2026-11-04)
+
+### Features
+
+- Add the Fujicolor C200, UltraMax 400, and Provia 100F film looks, and Cinema Yellow and Cinema Green from GR IV firmware for GR III and GR IIIx.
+- Add a Guides Only mode for composition without cropping photos, with guides that also follow the camera’s native aspect ratio.
+- Add Bloom and Halation to JPEG photos, with separate strength controls and the option to use both effects together.
+- Write the name of the film look into each JPEG as a keyword, so that Lightroom and other photo catalogs can find photos by look.
+- In-camera RAW development and Resize keep the framing and film look, and RAW development keeps the capture date and can apply another film look or Framing ratio.
+- Show the Framing ratio, Date Imprint format, Grain, Bloom, and Halation in the viewfinder, with clearer Date Imprint, Glow, and Grain icons in ADJ.
+
+### Fixes
+
+- Fix missing composition guides after aspect ratio changes and preserve native RAW framing and digital crop settings when cropping JPEG photos.
+- Make date stamps more reliable when photos are saved.
+
+## 1.3.5 (2026-10-31)
+
+### Fixes
+
+- The exposure box of ISO Setting no longer stays over GRKit in ADJ.
+- In ADJ, a touch on a GRKit row now selects it as on a native entry, and no longer changes the setting that was selected before GRKit, such as Outdoor View Setting.
+- GRKit installs up to 40 effects, instead of 20, Film Stock and Options in MENU list all of them, and Film Look in ADJ scrolls through them as a native list.
+- On GR IV 1.20, GR IV HDF 1.20, and GR IV Monochrome, the Fn adjustments of an effect change its own Shading and Clarity, and no longer change the Shading of the native Standard.
+- Enable GRKit, a switch in the GRKit section of MENU and in ADJ, turns all modules off and on again at once, and keeps the settings of each module.
+- While Film Look is off, the viewfinder shows the native Image Control icon, and turning Framing on or off changes the crop of the next picture at once.
+
+## 1.3.4 (2026-10-30)
+
+### Fixes
+
+- ADJ opens as usual again after the Fn adjustments page was left for playback or MENU.
+- In MENU, a module settings page shows its whole title, and ADJ Order lists only the modules that ADJ shows.
+- On GR IV, a photo in an aspect ratio set in the camera menu keeps its full size, where a saved Framing ratio of 5:4, 1:1, or 7:6 cropped it.
+- The camera no longer stops when a MENU item with its own list, such as ISO Setting, was opened before GRKit loaded and is opened again after it loads.
+
 ## 1.3.3 (2026-10-29)
 
 ### Fixes

@@ -1,0 +1,19 @@
+title = "光晕"
+
+[children.BLOOM]
+title = "柔光"
+
+[children.HALATION]
+title = "胶片光晕"
+
+[settings.BLOOM]
+label = "强度"
+values = ["关闭", "弱", "中", "强"]
+
+[settings.HALATION]
+label = "强度"
+values = ["关闭", "弱", "中", "强"]
+
+[settings.HALATION_COLOR]
+label = "颜色"
+values = ["红色", "橙色", "金色", "白色"]

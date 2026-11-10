@@ -21,14 +21,19 @@
 #define GRM_MAX_SEGMENT 0x10000U
 /* The ABI of the core (runtime/sdk/grkit.h). */
 #define GRM_ABI_MAJOR 2U
-#define GRM_ABI_MINOR 1U
+#define GRM_ABI_MINOR 6U
 #define GRM_POINT_OVERLAY_LAYER 1U
 #define GRM_POINT_MENU_PAGE 2U
 #define GRM_POINT_PICTURE_PLANE 3U
 #define GRM_POINT_EVENT 4U
+#define GRM_POINT_VIEWFINDER_INDICATOR 5U
 /* The events of a subscriber (GRKIT_EVENT_*). */
 #define GRM_EVENTS 3U
 #define GRM_PAGE_CHOICE 1U
+#define GRM_PAGE_SETTINGS 2U
+#define GRM_PAGE_GROUP 3U
+#define GRM_PAGE_MENU_ONLY 8U
+#define GRM_PAGE_CHILDREN 4U
 #define GRM_CHOICE_OFF_ROW 1U
 #define GRM_CHOICE_CORE_ROWS 2U
 #define GRM_CHOICE_OPTIONS 4U
@@ -70,22 +75,67 @@
 #define GRM_DESCRIPTOR_USE_COUNT_AT 28U
 #define GRM_DESCRIPTOR_TILES_AT 32U
 #define GRM_DESCRIPTOR_TILE_COUNT_AT 36U
+/* ABI 2.4 appends the flags of the module: a descriptor of GRM_DESCRIPTOR_FLAGS
+   bytes or more has them. */
+#define GRM_DESCRIPTOR_FLAGS_AT 40U
+#define GRM_DESCRIPTOR_FLAGS 44U
+#define GRM_MODULE_COLOR_ONLY 1U
 /* GrkitRegistration (no size word). */
 #define GRM_REGISTRATION 8U
 #define GRM_REGISTRATION_IMPL_AT 4U
 /* GrkitSetting. */
-#define GRM_SETTING 16U
+#define GRM_SETTING 16U /* ABI 2.0 minimum */
+#define GRM_SETTING_DEFAULT 20U
 #define GRM_SETTING_KEY_AT 4U
 #define GRM_SETTING_VALUES_AT 8U
 #define GRM_SETTING_FLAGS_AT 12U
+#define GRM_SETTING_DEFAULT_AT 16U
 /* GrkitLayer. */
-#define GRM_LAYER 20U
+#define GRM_LAYER 20U /* ABI 2.0 minimum */
+#define GRM_LAYER_CONDITIONAL 28U
 #define GRM_LAYER_FLAGS_AT 4U
 #define GRM_LAYER_PAINT_AT 8U
 #define GRM_LAYER_SETTING_AT 12U
 #define GRM_LAYER_ORDER_AT 16U
+#define GRM_LAYER_CONDITION_COUNT_AT 20U
+#define GRM_LAYER_CONDITIONS_AT 24U
+/* The icon shared by an indicator and an ADJ child. */
+#define GRM_ICON 16U
+#define GRM_ICON_KIND_AT 4U
+#define GRM_ICON_SETTING_AT 8U
+#define GRM_ICON_FIRST_TILE_AT 12U
+#define GRM_ICON_TILE 1U
+#define GRM_ICON_TONE 2U
+/* A core live-view label, for a status-row indicator (GRKIT_ICON_LABEL), and
+   the number of core labels (GRKIT_LABEL_COUNT). */
+#define GRM_ICON_LABEL 3U
+#define GRM_LABELS 14U
+#define GRM_CONDITION 12U
+#define GRM_CONDITION_SETTING_AT 0U
+#define GRM_CONDITION_COMPARISON_AT 4U
+#define GRM_CONDITION_VALUE_AT 8U
+#define GRM_CONDITION_EQUALS 1U
+#define GRM_CONDITION_NOT_EQUALS 2U
+#define GRM_CONDITIONS_MAX 4U
+#define GRM_INDICATOR 24U
+#define GRM_INDICATOR_PLACEMENT_AT 4U
+#define GRM_INDICATOR_SLOT_AT 8U
+#define GRM_INDICATOR_CONDITION_COUNT_AT 12U
+#define GRM_INDICATOR_CONDITIONS_AT 16U
+#define GRM_INDICATOR_ICON_AT 20U
+#define GRM_INDICATOR_NATIVE_SLOT 1U
+#define GRM_INDICATOR_STATUS_ROW 2U
+#define GRM_SLOT_IMAGE_CONTROL 1U
 /* GrkitPage. */
 #define GRM_PAGE 40U
+#define GRM_GROUP_PAGE 44U
+#define GRM_PAGE_CHILDREN_AT 40U
+#define GRM_PAGE_ICON 48U
+#define GRM_PAGE_ICON_AT 44U
+/* A page with the Fn setting of a row (ABI 2.5). */
+#define GRM_PAGE_FN 56U
+#define GRM_PAGE_FN_VALUE_AT 48U
+#define GRM_PAGE_FN_SETTING_AT 52U
 #define GRM_PAGE_KIND_AT 4U
 #define GRM_PAGE_SETTING_AT 8U
 #define GRM_PAGE_FLAGS_AT 12U
@@ -119,6 +169,8 @@
 #define GRM_NAME (8U + 1U + GRM_KEY)
 #define GRM_SETTING_PUBLIC 1U
 #define GRM_SETTING_SAVED 2U
+/* The rows of the setting show only on a camera with a color sensor (ABI 2.4). */
+#define GRM_SETTING_COLOR_ONLY 4U
 /* A used setting that is optional: its name starts with '?'. Its handle is
    GRM_NO_SETTING when no module has it. */
 #define GRM_NO_SETTING 0xffffffffU
@@ -133,13 +185,17 @@
 #define GRM_BAD_DESCRIPTOR 53
 #define GRM_NO_ROOM 54
 #define GRM_MISSING_SETTING 55
+/* A color-only module on a camera with a monochrome sensor. It is not an
+   error: the GRKit section of MENU does not list the module. */
+#define GRM_COLOR_ONLY 56
 
 struct grm_module {
     char id[9];
     u32 version, abi;
     u32 code_size, data_size, bss_size, descriptor;
-    u32 code_relocations, data_relocations, imports;
-    const u8 *code, *data, *relocations, *import_entries, *names;
+    u32 code_relocations, data_relocations, imports, tile_count;
+    /* tiles: the artwork after the import names (ABI 2.3), or 0. */
+    const u8 *code, *data, *relocations, *import_entries, *names, *tiles;
 };
 
 /* A symbol that an import can name: the FNV-1a hash of its name and its
@@ -176,12 +232,16 @@ static int grm_parse(const u8 *file, u32 size, struct grm_module *m)
     m->data_relocations = grm_word(file + 44);
     m->imports = grm_word(file + 48);
     u32 names = grm_word(file + 52);
+    /* The tiles that follow the file. Before ABI 2.3 this word is 0. */
+    m->tile_count = grm_word(file + 60);
+    if (m->tile_count > GRM_TILES) return GRM_BAD_FILE;
     if (m->code_size > GRM_MAX_SEGMENT || m->data_size > GRM_MAX_SEGMENT || m->bss_size > GRM_MAX_SEGMENT ||
         (m->code_size | m->data_size | m->bss_size | names) & 3 ||
         m->code_relocations > GRM_MAX_SEGMENT / 4 || m->data_relocations > GRM_MAX_SEGMENT / 4 ||
         m->imports > GRM_MAX_SEGMENT / 4 || names > GRM_MAX_SEGMENT) return GRM_BAD_FILE;
     u32 total = GRM_HEADER + m->code_size + m->data_size +
-                (m->code_relocations + m->data_relocations) * 4 + m->imports * 8 + names;
+                (m->code_relocations + m->data_relocations) * 4 + m->imports * 8 + names +
+                m->tile_count * GRM_TILE_BYTES;
     if (total != size) return GRM_BAD_FILE;
     if ((m->descriptor & 3) || !grm_inside(m->descriptor, GRM_DESCRIPTOR, m->code_size)) return GRM_BAD_FILE;
     m->code = file + GRM_HEADER;
@@ -189,7 +249,9 @@ static int grm_parse(const u8 *file, u32 size, struct grm_module *m)
     m->relocations = m->data + m->data_size;
     m->import_entries = m->relocations + (m->code_relocations + m->data_relocations) * 4;
     m->names = m->import_entries + m->imports * 8;
+    m->tiles = m->tile_count ? m->names + names : 0;
     if (m->abi >> 16 != GRM_ABI_MAJOR || (m->abi & 0xffff) > GRM_ABI_MINOR) return GRM_BAD_ABI;
+    if (m->tile_count && (m->abi & 0xffff) < 3) return GRM_BAD_FILE;
     return 0;
 }
 
@@ -269,8 +331,22 @@ static u32 grm_string(const struct grm_module *m, const u8 *code, u32 base, u32 
     return 0;
 }
 
-/* A setting of a module: its key, its number of values, and its flags. */
-struct grm_setting { char key[GRM_KEY]; u32 values, flags; };
+/* A setting of a module: its key, range, flags, and initial value. */
+struct grm_setting { char key[GRM_KEY]; u32 values, flags, default_value; };
+
+/* The flags of the descriptor of a module in `code` (its file code, or the
+   linked copy): GRM_MODULE_COLOR_ONLY, or 0
+   for a descriptor without flags. Return 0, or GRM_BAD_DESCRIPTOR for a flag
+   that this GRKit does not know. */
+static int grm_module_flags(const struct grm_module *m, const u8 *code, u32 *flags)
+{
+    const u8 *d = code + m->descriptor;
+    *flags = 0;
+    if (grm_word(d) < GRM_DESCRIPTOR_FLAGS) return 0;
+    if (!grm_inside(m->descriptor, GRM_DESCRIPTOR_FLAGS, m->code_size)) return GRM_BAD_DESCRIPTOR;
+    *flags = grm_word(d + GRM_DESCRIPTOR_FLAGS_AT);
+    return *flags & ~GRM_MODULE_COLOR_ONLY ? GRM_BAD_DESCRIPTOR : 0;
+}
 
 /* Read the settings and the used settings of the descriptor of a module whose
    code was linked for `base` (0 for the file itself). A used setting is a
@@ -286,13 +362,19 @@ static int grm_settings(const struct grm_module *m, const u8 *code, u32 base,
     const u8 *list = n ? grm_code_at(m, code, base, grm_word(d + GRM_DESCRIPTOR_SETTINGS_AT), n * GRM_SETTING) : d;
     const u8 *names = u ? grm_code_at(m, code, base, grm_word(d + GRM_DESCRIPTOR_USES_AT), u * 4) : d;
     if (!list || !names) return GRM_BAD_DESCRIPTOR;
+    u32 offset = n ? grm_word(d + GRM_DESCRIPTOR_SETTINGS_AT) : 0;
     for (u32 i = 0; i < n; ++i) {
-        const u8 *e = list + i * GRM_SETTING;
+        const u8 *e = grm_code_at(m, code, base, offset, GRM_SETTING);
+        if (!e) return GRM_BAD_DESCRIPTOR;
+        u32 size = grm_word(e);
+        if (size < GRM_SETTING || (size & 3) || !grm_code_at(m, code, base, offset, size)) return GRM_BAD_DESCRIPTOR;
+        offset += size;
         struct grm_setting *s = settings + i;
         s->values = grm_word(e + GRM_SETTING_VALUES_AT);
         s->flags = grm_word(e + GRM_SETTING_FLAGS_AT);
-        if (grm_word(e) < GRM_SETTING || !s->values || s->values > GRM_SETTING_VALUES ||
-            (s->flags & ~(GRM_SETTING_PUBLIC | GRM_SETTING_SAVED)) ||
+        s->default_value = size >= GRM_SETTING_DEFAULT ? grm_word(e + GRM_SETTING_DEFAULT_AT) : 0;
+        if (!s->values || s->values > GRM_SETTING_VALUES || s->default_value >= s->values ||
+            (s->flags & ~(GRM_SETTING_PUBLIC | GRM_SETTING_SAVED | GRM_SETTING_COLOR_ONLY)) ||
             !grm_string(m, code, base, grm_word(e + GRM_SETTING_KEY_AT), s->key, GRM_KEY, 0)) return GRM_BAD_DESCRIPTOR;
         for (u32 j = 0; j < i; ++j) {
             u32 k = 0;
@@ -313,7 +395,7 @@ static int grm_settings(const struct grm_module *m, const u8 *code, u32 base,
    settings of the module, GRM_USED | n for used setting n, or
    GRM_NO_SETTING for a layer without one. A page has one row for each
    value of its setting. */
-struct grm_layer { u32 paint, setting, flags, order; };
+struct grm_layer { u32 paint, setting, flags, order, descriptor; };
 struct grm_page { u32 address, setting, flags, rows; };
 /* A plane filter: its apply function, its setting, and its stage. */
 struct grm_filter { u32 apply, setting, stage; };
@@ -363,13 +445,88 @@ static int grm_texts(const struct grm_module *m, const u8 *code, u32 base, u32 a
 static int grm_tiles(const struct grm_module *m, const u8 *code, u32 base, const u8 **tiles, u32 *count)
 {
     const u8 *d = code + m->descriptor;
-    u32 n = grm_word(d + GRM_DESCRIPTOR_TILE_COUNT_AT);
+    u32 n = grm_word(d + GRM_DESCRIPTOR_TILE_COUNT_AT), address = grm_word(d + GRM_DESCRIPTOR_TILES_AT);
     *count = n;
     *tiles = 0;
-    if (!n) return 0;
+    if (!n) return m->tile_count ? GRM_BAD_DESCRIPTOR : 0;
     if (n > GRM_TILES) return GRM_BAD_DESCRIPTOR;
-    *tiles = grm_code_at(m, code, base, grm_word(d + GRM_DESCRIPTOR_TILES_AT), n * GRM_TILE_BYTES);
+    /* Since ABI 2.3 the tiles follow the file and the descriptor gives only
+       their count. Earlier modules keep them in the code. */
+    if (!address) {
+        if (m->tile_count != n) return GRM_BAD_DESCRIPTOR;
+        *tiles = m->tiles;
+        return 0;
+    }
+    if (m->tile_count) return GRM_BAD_DESCRIPTOR;
+    *tiles = grm_code_at(m, code, base, address, n * GRM_TILE_BYTES);
     return *tiles ? 0 : GRM_BAD_DESCRIPTOR;
+}
+
+/* Validate icon resources before INSTALL resolves used settings. Their
+   value counts are checked again after resolution. */
+static int grm_icon(const struct grm_module *m, const u8 *code, u32 base, u32 address,
+                    const struct grm_setting *settings, u32 setting_count, u32 use_count, u32 tile_count,
+                    int labels)
+{
+    const u8 *icon = grm_code_at(m, code, base, address, GRM_ICON);
+    if ((address & 3) || !icon || grm_word(icon) < GRM_ICON) return 0;
+    u32 kind = grm_word(icon + GRM_ICON_KIND_AT), setting = grm_word(icon + GRM_ICON_SETTING_AT);
+    u32 first = grm_word(icon + GRM_ICON_FIRST_TILE_AT);
+    if (setting != GRM_NO_SETTING && !grm_setting_reference(setting, setting_count, use_count)) return 0;
+    if (kind == GRM_ICON_TONE) return setting != GRM_NO_SETTING && (setting & GRM_USED) && !first;
+    /* Only a status-row indicator draws a core label. */
+    if (kind == GRM_ICON_LABEL)
+        return labels && first < GRM_LABELS &&
+               (setting == GRM_NO_SETTING || (setting & GRM_USED) || settings[setting].values <= GRM_LABELS - first);
+    if (kind != GRM_ICON_TILE || first >= tile_count) return 0;
+    return setting == GRM_NO_SETTING || (setting & GRM_USED) || settings[setting].values <= tile_count - first;
+}
+/* Conditions are ANDed; zero is an ordinary setting value, not Off.
+   A descriptor without conditions must also have a null pointer. */
+static int grm_conditions(const struct grm_module *m, const u8 *code, u32 base, u32 address, u32 count,
+                          const struct grm_setting *settings, u32 setting_count, u32 use_count)
+{
+    if (!count) return !address;
+    if (count > GRM_CONDITIONS_MAX) return 0;
+    const u8 *conditions = grm_code_at(m, code, base, address, count * GRM_CONDITION);
+    if (!conditions || (address & 3)) return 0;
+    for (u32 i = 0; i < count; ++i) {
+        const u8 *c = conditions + i * GRM_CONDITION;
+        u32 setting = grm_word(c), comparison = grm_word(c + GRM_CONDITION_COMPARISON_AT);
+        if (!grm_setting_reference(setting, setting_count, use_count) ||
+            (comparison != GRM_CONDITION_EQUALS && comparison != GRM_CONDITION_NOT_EQUALS) ||
+            (!(setting & GRM_USED) && grm_word(c + GRM_CONDITION_VALUE_AT) >= settings[setting].values)) return 0;
+    }
+    return 1;
+}
+/* Validate one indicator. Conditions are ANDed; zero is an ordinary setting
+   value, not an implicit Off. */
+static int grm_indicator(const struct grm_module *m, const u8 *code, u32 base, u32 address,
+                         const struct grm_setting *settings, u32 setting_count, u32 use_count, u32 tile_count)
+{
+    const u8 *p = grm_code_at(m, code, base, address, GRM_INDICATOR);
+    if ((address & 3) || !p || grm_word(p) < GRM_INDICATOR) return 0;
+    u32 placement = grm_word(p + GRM_INDICATOR_PLACEMENT_AT), slot = grm_word(p + GRM_INDICATOR_SLOT_AT);
+    if (placement == GRM_INDICATOR_NATIVE_SLOT ? slot != GRM_SLOT_IMAGE_CONTROL :
+        placement != GRM_INDICATOR_STATUS_ROW || slot) return 0;
+    u32 count = grm_word(p + GRM_INDICATOR_CONDITION_COUNT_AT);
+    if (!count || count > GRM_CONDITIONS_MAX) return 0;
+    if (!grm_conditions(m, code, base, grm_word(p + GRM_INDICATOR_CONDITIONS_AT), count,
+                        settings, setting_count, use_count)) return 0;
+    return grm_icon(m, code, base, grm_word(p + GRM_INDICATOR_ICON_AT), settings, setting_count, use_count, tile_count,
+                    placement == GRM_INDICATOR_STATUS_ROW);
+}
+/* Collect the descriptors in declaration order after registrations passed
+   validation. No pointer is published to the runtime until the module loads. */
+static u32 grm_indicators(const struct grm_module *m, const u8 *code, u32 base, u32 *addresses)
+{
+    const u8 *d = code + m->descriptor;
+    u32 count = 0, n = grm_word(d + GRM_DESCRIPTOR_REGISTRATION_COUNT_AT);
+    const u8 *list = grm_code_at(m, code, base, grm_word(d + GRM_DESCRIPTOR_REGISTRATIONS_AT), n * GRM_REGISTRATION);
+    for (u32 i = 0; i < n; ++i)
+        if (grm_word(list + i * GRM_REGISTRATION) == GRM_POINT_VIEWFINDER_INDICATOR)
+            addresses[count++] = grm_word(list + i * GRM_REGISTRATION + GRM_REGISTRATION_IMPL_AT);
+    return count;
 }
 
 /* Read the registrations of the module, whose code was linked for `base`.
@@ -394,6 +551,15 @@ static int grm_registrations(const struct grm_module *m, const u8 *code, u32 bas
         if (point == GRM_POINT_OVERLAY_LAYER) {
             const u8 *layer = grm_code_at(m, code, base, impl, GRM_LAYER);
             if (!layer || grm_word(layer) < GRM_LAYER) return GRM_BAD_DESCRIPTOR;
+            u32 size = grm_word(layer), descriptor = 0;
+            if (size != GRM_LAYER) {
+                if ((impl & 3) || size < GRM_LAYER_CONDITIONAL || !grm_code_at(m, code, base, impl, GRM_LAYER_CONDITIONAL))
+                    return GRM_BAD_DESCRIPTOR;
+                u32 count = grm_word(layer + GRM_LAYER_CONDITION_COUNT_AT);
+                if (!grm_conditions(m, code, base, grm_word(layer + GRM_LAYER_CONDITIONS_AT), count,
+                                    settings, setting_count, use_count)) return GRM_BAD_DESCRIPTOR;
+                if (count) descriptor = impl;
+            }
             u32 flags = grm_word(layer + GRM_LAYER_FLAGS_AT), paint = grm_word(layer + GRM_LAYER_PAINT_AT);
             u32 setting = grm_word(layer + GRM_LAYER_SETTING_AT);
             /* A Thumb function, or an ARM one at a word address. */
@@ -406,13 +572,50 @@ static int grm_registrations(const struct grm_module *m, const u8 *code, u32 bas
             if (*layer_count >= max) return GRM_NO_ROOM;
             struct grm_layer *l = layers + (*layer_count)++;
             l->paint = paint; l->setting = setting; l->flags = flags; l->order = grm_word(layer + GRM_LAYER_ORDER_AT);
+            l->descriptor = descriptor;
         } else if (point == GRM_POINT_MENU_PAGE) {
             const u8 *page = grm_code_at(m, code, base, impl, GRM_PAGE);
-            if (!page || grm_word(page) < GRM_PAGE || grm_word(page + GRM_PAGE_KIND_AT) != GRM_PAGE_CHOICE) return GRM_BAD_DESCRIPTOR;
+            if (!page || grm_word(page) < GRM_PAGE) return GRM_BAD_DESCRIPTOR;
+            if (grm_word(page) >= GRM_PAGE_ICON) {
+                if (!grm_code_at(m, code, base, impl, GRM_PAGE_ICON)) return GRM_BAD_DESCRIPTOR;
+                u32 icon = grm_word(page + GRM_PAGE_ICON_AT);
+                if (icon && !grm_icon(m, code, base, icon, settings, setting_count, use_count, tile_count, 0))
+                    return GRM_BAD_DESCRIPTOR;
+            }
+            u32 kind = grm_word(page + GRM_PAGE_KIND_AT), direct = kind == GRM_PAGE_SETTINGS;
+            /* ABI 2.5: Fn on the row of a value steps another setting. Only a
+               choice page with rows from the module has it. */
+            u32 fn_value = 0, fn_setting = GRM_NO_SETTING;
+            if (grm_word(page) >= GRM_PAGE_FN) {
+                if (!grm_code_at(m, code, base, impl, GRM_PAGE_FN)) return GRM_BAD_DESCRIPTOR;
+                fn_value = grm_word(page + GRM_PAGE_FN_VALUE_AT);
+                fn_setting = grm_word(page + GRM_PAGE_FN_SETTING_AT);
+            }
+            if (kind == GRM_PAGE_GROUP) {
+                u32 rows = grm_word(page + GRM_PAGE_ROWS_AT);
+                if (fn_value) return GRM_BAD_DESCRIPTOR;
+                if (grm_word(page) < GRM_GROUP_PAGE || !grm_code_at(m, code, base, impl, GRM_GROUP_PAGE) ||
+                    grm_word(page + GRM_PAGE_SETTING_AT) != GRM_NO_SETTING || grm_word(page + GRM_PAGE_FLAGS_AT) ||
+                    grm_word(page + GRM_PAGE_SETTING_ROWS_AT) || !rows || rows > GRM_PAGE_CHILDREN || rows + 1 > tile_count ||
+                    !grm_texts(m, code, base, grm_word(page + GRM_PAGE_TITLE_AT), GRM_LANGUAGES) ||
+                    !grm_code_at(m, code, base, grm_word(page + GRM_PAGE_CHILDREN_AT), rows * 4)) return GRM_BAD_DESCRIPTOR;
+                if (*page_count >= max) return GRM_NO_ROOM;
+                struct grm_page *p = pages + (*page_count)++;
+                p->address = impl; p->setting = GRM_NO_SETTING; p->flags = 0; p->rows = rows;
+                continue;
+            }
+            if (kind != GRM_PAGE_CHOICE && !direct) return GRM_BAD_DESCRIPTOR;
             u32 setting = grm_word(page + GRM_PAGE_SETTING_AT), flags = grm_word(page + GRM_PAGE_FLAGS_AT);
             u32 rows = grm_word(page + GRM_PAGE_ROWS_AT);
             if (!grm_setting_reference(setting, setting_count, use_count) ||
-                (flags & ~(GRM_CHOICE_OFF_ROW | GRM_CHOICE_CORE_ROWS | GRM_CHOICE_OPTIONS))) return GRM_BAD_DESCRIPTOR;
+                (flags & ~(GRM_CHOICE_OFF_ROW | GRM_CHOICE_CORE_ROWS | GRM_CHOICE_OPTIONS | GRM_PAGE_MENU_ONLY))) return GRM_BAD_DESCRIPTOR;
+            if (direct && ((flags & ~GRM_PAGE_MENU_ONLY) || !grm_word(page + GRM_PAGE_SETTING_ROWS_AT))) return GRM_BAD_DESCRIPTOR;
+            /* The Fn value is a row of the page and not Off. The Fn setting is
+               another setting with at least two values; the installer checks
+               a used one. */
+            if (fn_value && (direct || (flags & GRM_CHOICE_CORE_ROWS) || fn_value >= rows || fn_setting == setting ||
+                             !grm_setting_reference(fn_setting, setting_count, use_count) ||
+                             (!(fn_setting & GRM_USED) && settings[fn_setting].values < 2))) return GRM_BAD_DESCRIPTOR;
             /* The core gives the rows of a page of a used capability: the
                page has only its title. The installer checks the setting. */
             if (flags & GRM_CHOICE_CORE_ROWS) {
@@ -426,10 +629,10 @@ static int grm_registrations(const struct grm_module *m, const u8 *code, u32 bas
             /* One row and one tile for each value. The installer checks the
                values of a used setting. */
             if (!(setting & GRM_USED) && rows != settings[setting].values) return GRM_BAD_DESCRIPTOR;
-            if (!rows || rows > GRM_PAGE_ROWS || rows > tile_count ||
+            if (!rows || rows > GRM_PAGE_ROWS || (direct ? !tile_count : rows > tile_count) ||
                 !grm_texts(m, code, base, grm_word(page + GRM_PAGE_TITLE_AT), GRM_LANGUAGES) ||
-                !grm_texts(m, code, base, grm_word(page + GRM_PAGE_SUMMARIES_AT), rows * GRM_LANGUAGES) ||
-                !grm_texts(m, code, base, grm_word(page + GRM_PAGE_LABELS_AT), rows * GRM_LANGUAGES)) return GRM_BAD_DESCRIPTOR;
+                (!direct && (!grm_texts(m, code, base, grm_word(page + GRM_PAGE_SUMMARIES_AT), rows * GRM_LANGUAGES) ||
+                 !grm_texts(m, code, base, grm_word(page + GRM_PAGE_LABELS_AT), rows * GRM_LANGUAGES)))) return GRM_BAD_DESCRIPTOR;
             /* The rows of a native settings page: settings of the module, the
                first the page setting, each with its label and value texts. */
             u32 setting_rows = grm_word(page + GRM_PAGE_SETTING_ROWS_AT);
@@ -468,7 +671,28 @@ static int grm_registrations(const struct grm_module *m, const u8 *code, u32 bas
             if (*filter_count >= max) return GRM_NO_ROOM;
             struct grm_filter *f = filters + (*filter_count)++;
             f->apply = apply; f->setting = setting; f->stage = stage;
+        } else if (point == GRM_POINT_VIEWFINDER_INDICATOR) {
+            if (!grm_indicator(m, code, base, impl, settings, setting_count, use_count, tile_count))
+                return GRM_BAD_DESCRIPTOR;
         } else if (point != GRM_POINT_EVENT) return GRM_BAD_DESCRIPTOR;
+    }
+    /* Group links must name registered settings pages in this module, each
+       with 2 or more values of its first setting: Off, then the values that
+       turn it on. This also rules out cycles and descriptors that the
+       installer never patches. */
+    for (u32 i = 0; i < *page_count; ++i) {
+        const u8 *page = grm_code_at(m, code, base, pages[i].address, GRM_PAGE);
+        if (grm_word(page + GRM_PAGE_KIND_AT) != GRM_PAGE_GROUP) continue;
+        const u8 *children = grm_code_at(m, code, base, grm_word(page + GRM_PAGE_CHILDREN_AT), pages[i].rows * 4);
+        for (u32 r = 0; r < pages[i].rows; ++r) {
+            u32 child = grm_word(children + r * 4), found = 0;
+            for (u32 k = 0; k < *page_count; ++k) if (pages[k].address == child) {
+                const u8 *p = grm_code_at(m, code, base, child, GRM_PAGE);
+                found = grm_word(p + GRM_PAGE_KIND_AT) == GRM_PAGE_SETTINGS &&
+                    pages[k].flags == GRM_PAGE_MENU_ONLY && pages[k].rows >= 2;
+            }
+            if (!found) return GRM_BAD_DESCRIPTOR;
+        }
     }
     return 0;
 }

@@ -1,41 +1,83 @@
 use super::*;
 
 #[test]
-fn every_code_region_lies_in_the_tail() {
+fn every_code_region_lies_in_the_tail() -> Result<()> {
     for target in target::TARGETS {
         let layout = target.layout;
-        let (tail, end) = layout.tail;
-        // The decoded image ends where the startup .data copy source ends.
+        let tail = layout.tail;
         assert!(
             tail >= target.data_source + target.data_size,
             "{}",
             target.name
         );
-        // The processing region, then the menu, then Framing after the menu
-        // code, which shares the menu region.
-        let (menu_start, menu_stop) = layout.menu();
-        let mut next = tail;
-        if target.family.processing_source.is_some() {
-            let (start, stop) = layout.processing();
-            assert!(
-                start >= next && start < stop && stop <= menu_start,
-                "{}",
-                target.name
-            );
-            next = stop;
-        }
-        assert!(
-            menu_start >= next && menu_start < menu_stop && menu_stop == end,
-            "{}",
-            target.name
-        );
-        let (start, stop) = layout.framing(menu_start + 0x10);
-        assert!(
-            start > menu_start && start % 0x100 == 0 && stop == end,
-            "{}",
-            target.name
-        );
+        let (processing_start, end) = layout.processing()?;
+        assert_eq!(processing_start, tail + 0x100);
+        assert_eq!(end, components::RTOS_EXECUTABLE_END);
+        // Growth beyond the former 1 KiB Processing partition and 48 KiB
+        // core budget still leaves room for the following component.
+        let processing_end = processing_start + 0x1004;
+        let (menu_start, _) = layout.menu(processing_end)?;
+        assert_eq!(menu_start, tail + 0x1200);
+        let (framing_start, _) = layout.framing(menu_start + 0xc004)?;
+        assert_eq!(framing_start, tail + 0xd300);
+        assert!(framing_start < end);
+        assert!(layout.menu(end).is_err());
+        assert!(layout.framing(u32::MAX).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn core_span_covers_payloads_and_rejects_invalid_bounds() -> Result<()> {
+    let tail = target::GR3_210.layout.tail;
+    let payload = |address, size, site| Patch {
+        address,
+        points: 0,
+        before: vec![0; size],
+        after: vec![0; size],
+        site,
+    };
+    let mut plan = PatchPlan {
+        patches: vec![
+            payload(tail + 0x100, 0x1004, Some(Anchor::Tail)),
+            payload(tail + 0x1200, 0xc004, Some(Anchor::Tail)),
+        ],
+        relocations: vec![],
+        references: vec![],
+        exports: vec![],
+    };
+    assert_eq!(plan.core_size(tail)?, 0xd300);
+    validate_plan(&plan)?;
+    plan.patches
+        .push(payload(tail + 0x1200, 4, Some(Anchor::Tail)));
+    assert!(validate_plan(&plan).is_err());
+    plan.patches.pop();
+    // A firmware hook does not change the core high-water mark.
+    plan.patches
+        .push(payload(tail - 4, 4, Some(Anchor::Firmware(tail - 4))));
+    assert_eq!(plan.core_size(tail)?, 0xd300);
+    for patch in [
+        payload(tail - 4, 4, Some(Anchor::Tail)),
+        payload(components::RTOS_EXECUTABLE_END - 4, 8, Some(Anchor::Tail)),
+        payload(u32::MAX - 3, 8, Some(Anchor::Tail)),
+        payload(tail + 0x100, 4, None),
+        payload(tail - 4, 8, None),
+    ] {
+        plan.patches = vec![patch];
+        assert!(plan.core_size(tail).is_err());
+    }
+    plan.patches = vec![payload(
+        components::RTOS_EXECUTABLE_END - 4,
+        4,
+        Some(Anchor::Tail),
+    )];
+    assert_eq!(
+        tail + plan.core_size(tail)?,
+        components::RTOS_EXECUTABLE_END
+    );
+    plan.patches.clear();
+    assert_eq!(plan.core_size(tail)?, 0);
+    Ok(())
 }
 
 #[test]
@@ -55,9 +97,60 @@ fn each_camera_offers_what_its_runtime_has() {
         assert!(layout.sites.len() == target.family.hooks.len());
         // Each extension point has hooks: those of the capabilities, and
         // those of the module pages, layers, and filters.
-        let points: Vec<_> = target.family.hooks.iter().map(|hook| hook.point).collect();
         for point in grkit_core::capabilities::Point::ALL {
-            assert!(points.contains(&point), "{} {point:?}", camera.id);
+            assert!(
+                target
+                    .family
+                    .hooks
+                    .iter()
+                    .any(|hook| hook.point_mask() & point.bit() != 0),
+                "{} {point:?}",
+                camera.id
+            );
+        }
+    }
+}
+
+#[test]
+fn framing_without_film_look_still_records_shot_parameters() {
+    use crate::components::{Part, Point};
+    for target in target::TARGETS {
+        let hook = target
+            .family
+            .hooks
+            .iter()
+            .find(|hook| hook.symbol == "module_parameters")
+            .unwrap();
+        assert_eq!(hook.part, Part::Processing);
+        assert!(hook.link);
+        assert_eq!(
+            hook.point_mask(),
+            Point::Tuning.bit() | Point::CaptureAspect.bit()
+        );
+        // The RAW development lists the effects and the Framing ratios with
+        // the same list hooks, and clears both at its start.
+        const DEVELOP: [&str; 5] = [
+            "picture_develop_tone",
+            "menu_develop_count",
+            "menu_develop_row",
+            "menu_develop_current",
+            "menu_develop_open",
+        ];
+        for other in target
+            .family
+            .hooks
+            .iter()
+            .filter(|hook| hook.symbol != "module_parameters")
+        {
+            let expected = if DEVELOP.contains(&other.symbol) {
+                Point::Tuning.bit() | Point::CaptureAspect.bit()
+            } else if other.symbol == "grain_gate" {
+                // Film Look gives the gate the Shading and Clarity of its effect.
+                Point::PipelineGrain.bit() | Point::Tuning.bit()
+            } else {
+                other.point.bit()
+            };
+            assert_eq!(other.point_mask(), expected, "{}", other.symbol);
         }
     }
 }
@@ -337,4 +430,196 @@ fn fn_hint_ids_are_those_of_the_native_adj_refresh() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// On GR IV the model setters of the parameter page are wrappers of 0x50 bytes,
+/// one for each row kind, from that of kind 0. The setter site of each row is
+/// the wrapper of its row kind (`PARAMETER_KINDS`). GR III does not space its
+/// setters evenly, so it is not checked here.
+#[test]
+fn gr4_parameter_setters_are_those_of_their_row_kinds() {
+    for target in target::TARGETS
+        .iter()
+        .filter(|target| target.family.name == "gr4")
+    {
+        let definitions = header_definitions(&target.header(), false);
+        let kinds: Vec<u32> = definitions["PARAMETER_KINDS"]
+            .trim_matches(|c| c == '{' || c == '}')
+            .split(',')
+            .map(|kind| kind.trim().parse().unwrap())
+            .collect();
+        let site = |symbol: &str| {
+            target
+                .layout
+                .sites
+                .iter()
+                .find(|site| site.0 == symbol)
+                .unwrap_or_else(|| panic!("{} has no {symbol}", target.name))
+                .1
+        };
+        let first = site("menu_parameter_set_0");
+        for (row, kind) in kinds.iter().enumerate() {
+            assert_eq!(
+                site(&format!("menu_parameter_set_{row}")),
+                first + kind * 0x50,
+                "{} row {row} (kind {kind})",
+                target.name
+            );
+        }
+    }
+}
+
+/// The function of each row kind in the parameter model, by row kind. The
+/// model selects the function of a row kind from a table of cases. The table
+/// is found near a call of `first`, the function of kind 0, and each case
+/// calls the function of its kind first.
+fn kind_functions(words: &[u32], first: u32) -> Option<Vec<Option<u32>>> {
+    let word = |address: u32| {
+        words
+            .get(((address - target::RTOS_BASE) / 4) as usize)
+            .copied()
+    };
+    let calls = (0..words.len() as u32)
+        .map(|index| target::RTOS_BASE + index * 4)
+        .filter(|&address| {
+            word(address).is_some_and(|value| {
+                value >> 24 == 0xeb && relocation::branch_target(address, value) == Some(first)
+            })
+        });
+    for call in calls {
+        let Some(switch) = (0..0x200u32)
+            .map(|step| call - step * 4)
+            .find(|&at| word(at).is_some_and(|value| value & 0xffff_fff0 == 0x979f_f100))
+        else {
+            continue;
+        };
+        // The largest row kind of the table.
+        let compare = word(switch - 4)?;
+        if compare & 0x0ff0_f000 != 0x0350_0000 {
+            continue;
+        }
+        let last = (compare & 0xff).rotate_right(((compare >> 8) & 0xf) * 2);
+        let kinds = (0..=last)
+            .map(|kind| {
+                let case = word(switch + 8 + kind * 4)?;
+                (0..16)
+                    .map(|step| case + step * 4)
+                    .map_while(|at| {
+                        word(at)
+                            .filter(|value| value >> 24 != 0xea)
+                            .map(|v| (at, v))
+                    })
+                    .find(|(_, value)| value >> 24 == 0xeb)
+                    .and_then(|(at, value)| relocation::branch_target(at, value))
+            })
+            .collect();
+        return Some(kinds);
+    }
+    None
+}
+
+/// The native getter that a getter of the parameter model passes on to: its
+/// first jump to a distant function.
+fn tail_call(words: &[u32], function: u32) -> Option<u32> {
+    (0..64)
+        .map(|step| function + step * 4)
+        .filter_map(|at| {
+            let value = *words.get(((at - target::RTOS_BASE) / 4) as usize)?;
+            (value >> 24 == 0xea)
+                .then(|| relocation::branch_target(at, value))
+                .flatten()
+        })
+        .find(|&to| to.abs_diff(function) > 0x1000)
+}
+
+/// Each row of the parameter page reads, writes, and names the row kind of
+/// `PARAMETER_KINDS`: its getter and setter sites are the functions that the
+/// jump tables of the parameter model call for that kind, and its row site
+/// calls the native getter of that kind. GR IV 1.20 once had the setters of
+/// shading and clarity one kind too far, and the stock bytes could not show
+/// it, because those setters are equal functions.
+#[test]
+#[ignore = "Requires local GRKIT_TEST_FIRMWARE, GRKIT_TEST_FIRMWARE_GR4, GRKIT_TEST_FIRMWARE_GR4_120, and GRKIT_TEST_FIRMWARE_GR4_120_0528"]
+fn parameter_rows_are_those_of_their_row_kinds() -> Result<()> {
+    for (variable, target) in [
+        ("GRKIT_TEST_FIRMWARE", &target::GR3_210),
+        ("GRKIT_TEST_FIRMWARE_GR4", &target::GR4_111),
+        ("GRKIT_TEST_FIRMWARE_GR4_120", &target::GR4_120),
+        ("GRKIT_TEST_FIRMWARE_GR4_120_0528", &target::GR4_120_0528),
+    ] {
+        let path = std::env::var(variable).with_context(|| format!("Set {variable}"))?;
+        let image = verify_firmware(Path::new(&path), target)?;
+        let words: Vec<u32> = image.body[..(target.data_source - target::RTOS_BASE) as usize]
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect();
+        let definitions = header_definitions(&target.header(), false);
+        let kinds: Vec<u32> = definitions["PARAMETER_KINDS"]
+            .trim_matches(|c| c == '{' || c == '}')
+            .split(',')
+            .map(|kind| kind.trim().parse().unwrap())
+            .collect();
+        let site = |symbol: &str| -> u32 {
+            target
+                .layout
+                .sites
+                .iter()
+                .find(|site| site.0 == symbol)
+                .unwrap_or_else(|| panic!("{} has no {symbol}", target.name))
+                .1
+        };
+        let getters = kind_functions(&words, site("menu_parameter_get_0"))
+            .with_context(|| format!("{}: no getter switch", target.name))?;
+        let setters = kind_functions(&words, site("menu_parameter_set_0"))
+            .with_context(|| format!("{}: no setter switch", target.name))?;
+        for (row, &kind) in kinds.iter().enumerate() {
+            let getter = getters.get(kind as usize).copied().flatten();
+            let setter = setters.get(kind as usize).copied().flatten();
+            let context = format!("{} row {row} (kind {kind})", target.name);
+            assert_eq!(
+                Some(site(&format!("menu_parameter_get_{row}"))),
+                getter,
+                "{context}: getter"
+            );
+            assert_eq!(
+                Some(site(&format!("menu_parameter_set_{row}"))),
+                setter,
+                "{context}: setter"
+            );
+            let at = site(&format!("menu_parameter_row_{row}"));
+            let call =
+                relocation::branch_target(at, words[((at - target::RTOS_BASE) / 4) as usize]);
+            assert_eq!(
+                call,
+                tail_call(&words, getter.unwrap()),
+                "{context}: row text"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The GR IV sources of `grkit_core::gr4_looks`, which the site reads without the build
+/// targets, name the same files, data sections, and type tables as the targets.
+#[test]
+fn gr4_look_sources_match_their_targets() {
+    for source in &grkit_core::gr4_looks::SOURCES {
+        let target = target::TARGETS
+            .iter()
+            .find(|t| t.firmware_sha256 == source.firmware_sha256)
+            .unwrap_or_else(|| panic!("No target for GR IV {}", source.version));
+        assert_eq!(target.firmware, format!("GR IV {}", source.version));
+        let tables = target.image_control.unwrap().tables;
+        assert_eq!(
+            source.layout(),
+            (
+                target.data_start,
+                target.data_source,
+                target.data_size,
+                [tables[0], tables[1]]
+            ),
+            "{}",
+            target.name
+        );
+    }
 }

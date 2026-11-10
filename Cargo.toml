@@ -1,9 +1,9 @@
 [workspace]
-members = ["crates/grkit-core", "crates/grkit-build", "crates/grkit-cli", "crates/grkit-wasm"]
+members = ["crates/grkit-core", "crates/grkit-build", "crates/grkit-cli", "crates/grkit-wasm", "crates/grkit-firmware"]
 resolver = "2"
 
 [workspace.package]
-version = "1.3.3"
+version = "1.5.4"
 edition = "2021"
 rust-version = "1.92"
 publish = false
@@ -29,6 +29,7 @@ wasm-bindgen = "=0.2.128"
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 grkit-core = { path = "crates/grkit-core" }
 grkit-build = { path = "crates/grkit-build" }
+grkit-firmware = { path = "crates/grkit-firmware" }
 
 [profile.release]
 lto = "thin"

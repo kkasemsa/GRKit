@@ -5,26 +5,32 @@
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit 為理光 GR III、GR IIIx 與 GR IV 加上底片濾鏡、XPan 等畫面比例、日期浮水印與顆粒，從記憶卡執行，免刷機。拔出記憶卡，相機就恢復原狀。
+GRKit 為理光 GR III、GR IIIx 與 GR IV 加上底片濾鏡、XPan 等畫面比例、日期浮水印、光暈與顆粒，從記憶卡執行，不改韌體。拔出記憶卡，相機就恢復原狀。
 
 <p>
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.zh-Hant.jpg" alt="ADJ 模式中的 GRKit 頁面" width="49%">
   <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.zh-Hant.jpg" alt="MENU 自訂頁中的 GRKit 小節" width="49%">
 </p>
 
-照片：nagi usano 拍攝的 [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/)，[CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)。
+照片：[MIKI Yoshihito](https://www.flickr.com/photos/mujitra/53311001084/)，[CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)。
 
 ## 功能
 
 拍攝時按下 ADJ 撥桿，選擇第 6 項 GRK。
 
 - **底片風格**：Portra 400、Velvia 100、Tri-X 400 等，取景時即時預覽。也可以在 [grkit.app](https://grkit.app) 匯入自己的 `.cube` LUT 或 Lightroom 預設集。風格由開源底片 LUT 擬合而成，效果接近原 LUT，但不完全相同（[來源](effects/NOTICE.md)）。
-- **畫幅**：XPan、2.35:1、16:9、4:3、5:4、7:6 與 1:1，取景時以遮罩或框線標出範圍。
+- **構圖比例**：XPan、2.35:1、16:9、4:3、5:4、7:6 與 1:1。可裁切 JPEG，也可僅輔助構圖，取景時以遮罩或框線標出範圍。兩種模式下，選擇比例都會把相機設為 3:2。關閉構圖比例時保留相機目前的比例。
+
+  RAW 的預設裁切範圍保持原生 3:2，並保留相機的數位裁切設定。內嵌預覽仍可能顯示所選構圖。
+
 - **輔助線**：三分法、中心、黃金分割與對角線。
 - **加印日期**：在照片上印日期，有經典、GR1s 點陣與 GR II 三種樣式。
+- **光暈**：柔光讓燈光和高光向周圍柔和擴散。底片光暈在明亮光源周圍形成橙紅色光暈，模擬電影底片效果。兩項各有「啟用」和「強度」設定，可同時開啟。
 - **粒紋感**：弱、中、強、特強四段，粒紋大小可選自動、小、中、大。
 
 開機後 GRKit 需要約 8 到 10 秒載入，GR IV 以及安裝或更新後的第一次開機會更久。在這之前相機使用原本的設定。完整設定在 MENU 自訂頁最後的 GRKit 小節。想自己寫模組，請見 [Writing a module](docs/modules.md)（英文）。
+
+**快速啟動**：使用選用的[快速啟動韌體](resources/FASTBOOT.zh-Hant.md)，同一個 GRKit 安裝包在開機後很快就能載入。它在 grkit.app 的[快速啟動頁面](https://grkit.app/zh-hant/fastboot/)上以 Ricoh 官方韌體製作，以韌體更新的方式安裝。GRKit 本身從不寫入韌體。
 
 ## 支援機型
 
@@ -78,6 +84,7 @@ grkit verify dist/GRKit.zip
 
 - [架構](docs/architecture.md)
 - [撰寫模組](docs/modules.md)與[模組參考](docs/module-reference.md)
+- [快速啟動韌體](docs/fastboot.md)：供 SD 腳本使用的介面
 - [發布流程](docs/releasing.md)
 - [效果](effects/README.md)
 - [網站](web/README.md)

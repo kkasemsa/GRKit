@@ -375,7 +375,7 @@ fn compiler_rejects_cover_icons_that_do_not_fit() {
     definition["icon"] = box_icon.clone();
     for (key, value) in [
         ("name", json!("")),
-        ("number", json!("1234567")),
+        ("number", json!("123456789")),
         ("number", json!("é")),
         ("band", json!("yes")),
         ("template", json!("can")),
@@ -533,6 +533,81 @@ fn published_cover_icons_show_the_words_of_the_effect_name() {
     }
 }
 
+/// The status row holds every built-in status indicator at once, with the
+/// widest label of each label indicator, before its right edge
+/// (`runtime/viewfinder.h`). A label takes its width and a gap; an icon
+/// takes one step.
+#[test]
+fn built_in_status_row_fits_with_its_widest_labels() {
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let viewfinder = fs::read_to_string(repository.join("runtime/viewfinder.h")).unwrap();
+    let define = |name: &str| -> usize {
+        viewfinder
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("#define {name} ")))
+            .unwrap_or_else(|| panic!("runtime/viewfinder.h has no {name}"))
+            .trim()
+            .trim_end_matches('U')
+            .parse()
+            .unwrap()
+    };
+    let table = artwork::overlay_labels();
+    let width = |index: usize| artwork::overlay_label_pixels(&table, index).0;
+    let widest = |range: std::ops::RangeInclusive<usize>| range.map(width).max().unwrap();
+    let date = artwork::OVERLAY_LABELS
+        .iter()
+        .position(|label| *label == "DATE")
+        .unwrap();
+    let mut row = define("STATUS_LEFT");
+    let mut indicators = 0;
+    let mut modules: Vec<_> = fs::read_dir(repository.join("modules"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    modules.sort();
+    for folder in modules {
+        let manifest: toml::Table = fs::read_to_string(folder.join("module.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        for indicator in manifest
+            .get("indicators")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if indicator["placement"].as_str() != Some("status_row") {
+                continue;
+            }
+            indicators += 1;
+            let icon = indicator["icon"].as_table().unwrap();
+            row += match icon.get("label").and_then(|v| v.as_str()) {
+                Some("ratio") => widest(1..=7) + define("STATUS_LABEL_GAP"),
+                Some("DATE") if icon.contains_key("setting") => {
+                    widest(date + 1..=artwork::OVERLAY_LABELS.len() - 1)
+                        + define("STATUS_LABEL_GAP")
+                }
+                Some(label) => {
+                    let index = artwork::OVERLAY_LABELS
+                        .iter()
+                        .position(|l| *l == label)
+                        .unwrap();
+                    width(index) + define("STATUS_LABEL_GAP")
+                }
+                None => define("STATUS_STEP"),
+            };
+        }
+    }
+    assert_eq!(
+        indicators, 5,
+        "Framing, Date Imprint, Bloom, Halation, and Grain"
+    );
+    assert!(
+        row <= define("STATUS_RIGHT"),
+        "the status row needs {row} pixels"
+    );
+}
+
 #[test]
 fn overlay_labels_fit_their_area_and_outline_their_text() {
     let table = artwork::overlay_labels();
@@ -551,8 +626,17 @@ fn overlay_labels_fit_their_area_and_outline_their_text() {
             (width, height),
             (field(index * 8, 2), field(index * 8 + 2, 2))
         );
-        assert_eq!(height, artwork::OVERLAY_LABEL_HEIGHT);
-        // A Framing label at the left of the row ends before the centered
+        // A one-line label is as high as a ratio. A Date Imprint format with
+        // the time on a second line is as high as a status-row icon, and
+        // fits the 40-pixel status row.
+        let expected = if artwork::OVERLAY_LABELS[index].ends_with(" HM") {
+            artwork::OVERLAY_TWO_LINE_HEIGHT
+        } else {
+            artwork::OVERLAY_LABEL_HEIGHT
+        };
+        assert_eq!(height, expected, "label {index}");
+        assert!(height <= 40);
+        // A status-row label at the left of the row ends before the centered
         // load cue starts.
         let widest = if index == 0 { 200 } else { 80 };
         assert!(
@@ -577,24 +661,40 @@ fn overlay_labels_fit_their_area_and_outline_their_text() {
         }
     }
     let cue = field(0, 2);
-    let widest = (1..artwork::OVERLAY_LABELS.len())
-        .map(|index| field(index * 8, 2))
-        .max()
-        .unwrap();
+    let widest = (1..=7).map(|index| field(index * 8, 2)).max().unwrap();
     assert!(7 + widest < 360 - cue / 2);
 }
 
 /// Label n names the CORE.ASPECT value n (LABEL_RATIO in runtime/sdk/grkit.h):
 /// it starts the summary of value n of the Framing module. The Date Imprint
-/// sign follows the ratios (LABEL_DATE).
+/// sign follows the ratios (LABEL_DATE), then one label for each format.
 #[test]
 fn overlay_labels_follow_the_aspect_values() {
     let aspect = grkit_core::capabilities::CAPABILITIES
         .iter()
         .find(|capability| capability.key == "ASPECT")
         .unwrap();
-    assert_eq!(artwork::OVERLAY_LABELS.len(), aspect.values as usize + 1);
     assert_eq!(artwork::OVERLAY_LABELS[aspect.values as usize], "DATE");
+    let date = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../modules/date/module.toml"),
+    )
+    .unwrap();
+    let styles: usize = date
+        .split("[[settings]]")
+        .find(|setting| setting.contains("key = \"STYLE\""))
+        .and_then(|setting| {
+            setting
+                .lines()
+                .find_map(|line| line.strip_prefix("values = "))
+        })
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        artwork::OVERLAY_LABELS.len(),
+        aspect.values as usize + styles
+    );
     let text = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../modules/framing/text/en.toml"),
     )
@@ -612,4 +712,135 @@ fn overlay_labels_follow_the_aspect_values() {
             "label {value}"
         );
     }
+}
+
+/// A native look whose level-0 rows hold `a` and `b` off the diagonal.
+fn native_look() -> grkit_core::native_look::NativeLook {
+    use grkit_core::native_look::{NativeLook, BANKS, LEVELS};
+    let levels: [[[i32; 9]; LEVELS]; BANKS] = std::array::from_fn(|bank| {
+        std::array::from_fn(|level| {
+            let gain = 1024 - 64 * level as i32;
+            let (a, b) = (20 + bank as i32, -10);
+            let mut m = [0; 9];
+            for r in 0..3 {
+                let off = [a * gain / 1024, b * gain / 1024];
+                m[r * 3 + (r + 1) % 3] = off[0];
+                m[r * 3 + (r + 2) % 3] = off[1];
+                m[r * 4] = gain - off[0] - off[1];
+            }
+            m
+        })
+    });
+    NativeLook::from_levels(
+        [
+            1298, 750, 0, 0, 1448, 843, 0, 0, 1298, 750, 0, 0, 1205, 843, 0, 0,
+        ],
+        [
+            0, 1, 2, 2, 2, 3, 4, 5, 5, 5, 6, 7, 8, 8, 8, 9, 10, 11, 11, 11,
+        ],
+        [0; 21],
+        &levels,
+    )
+    .unwrap()
+}
+
+fn fn_defaults() -> serde_json::Value {
+    json!({"saturation": -2, "hue": 0, "key": 0, "contrast": 1, "highlight": 0, "shadow": -3,
+        "sharpness": -3, "shading": 0, "clarity": 0})
+}
+
+#[test]
+fn native_look_round_trips_in_the_larger_file() {
+    let mut effect = fixture();
+    effect["native_look"] = native_look().to_json();
+    effect["fn_defaults"] = fn_defaults();
+    let icon = vec![0; effects::ICON_SIZE];
+    let bytes = effects::encode(&effect, &icon).unwrap();
+    assert_eq!(bytes.len(), effects::SIZE_WITH_LEVELS);
+    assert_eq!(
+        u32::from_le_bytes(bytes[84..88].try_into().unwrap()),
+        32 | 64
+    );
+    // The Fn defaults after the set, and no bytes in the reserved field.
+    assert_eq!(effects::FN_DEFAULTS, 8624);
+    assert_eq!(&bytes[8624..8633], &[0xfe, 0, 0, 1, 0, 0xfd, 0xfd, 0, 0]);
+    assert!(bytes[120..128].iter().all(|v| *v == 0));
+    let (decoded, _) = effects::decode(&bytes).unwrap();
+    assert_eq!(decoded.native_look, Some(native_look()));
+    assert_eq!(decoded.to_json(), effect);
+    assert_eq!(decoded.encode(&icon).unwrap(), bytes);
+}
+
+#[test]
+fn native_look_excludes_hue_sectors_and_monochrome() {
+    let mut effect = fixture();
+    effect["native_look"] = native_look().to_json();
+    effect["hue_sectors"] = json!({"matrices": vec![vec![0; 6]; 11], "weight": [0, 0, 0, 0]});
+    let icon = vec![0; effects::ICON_SIZE];
+    assert!(effects::encode(&effect, &icon).is_err());
+    let mut mono = fixture();
+    mono["flags"] = json!(1);
+    mono["native_look"] = native_look().to_json();
+    assert!(effects::encode(&mono, &icon).is_err());
+    let mut bad = fixture();
+    bad["native_look"] = native_look().to_json();
+    bad["fn_defaults"] = fn_defaults();
+    bad["fn_defaults"]["shadow"] = json!(5);
+    assert!(effects::encode(&bad, &icon).is_err());
+}
+
+/// Feature 64 alone: any effect, a monochrome one included, takes the larger file with the
+/// defaults at FN_DEFAULTS and zeros elsewhere after SIZE.
+#[test]
+fn fn_defaults_go_with_any_effect() {
+    let icon = vec![0; effects::ICON_SIZE];
+    let mut mono = fixture();
+    mono["flags"] = json!(1);
+    let row = mono["matrix"].as_array().unwrap()[..3].to_vec();
+    mono["matrix"] = json!([row.clone(), row.clone(), row].concat());
+    let curve = mono["curves"][0].clone();
+    mono["curves"] = json!([curve.clone(), curve.clone(), curve]);
+    mono["fn_defaults"] = fn_defaults();
+    let bytes = effects::encode(&mono, &icon).unwrap();
+    assert_eq!(bytes.len(), effects::SIZE_WITH_LEVELS);
+    assert_eq!(u32::from_le_bytes(bytes[84..88].try_into().unwrap()), 64);
+    assert!(bytes[effects::SIZE..8624].iter().all(|v| *v == 0));
+    assert!(bytes[8633..].iter().all(|v| *v == 0));
+    let (decoded, _) = effects::decode(&bytes).unwrap();
+    assert_eq!(decoded.fn_defaults, Some([-2, 0, 0, 1, 0, -3, -3, 0, 0]));
+    assert_eq!(decoded.encode(&icon).unwrap(), bytes);
+    // A byte after the defaults, or defaults without the feature bit, fail.
+    let mut extra = bytes.clone();
+    extra[8633] = 1;
+    assert!(effects::decode(&extra).is_err());
+    let mut missing = bytes.clone();
+    missing[84] = 0;
+    assert!(effects::decode(&missing).is_err());
+    // Hue levels keep their place before the defaults.
+    let mut hue = fixture();
+    hue["hue_sectors"] = json!({"matrices": vec![vec![0; 6]; 11], "weight": [0, 0, 0, 0],
+        "levels": vec![vec![vec![0; 6]; 11]; 3]});
+    hue["fn_defaults"] = fn_defaults();
+    let bytes = effects::encode(&hue, &icon).unwrap();
+    let (decoded, _) = effects::decode(&bytes).unwrap();
+    assert!(decoded.hue_sectors.unwrap().levels.is_some());
+    assert_eq!(decoded.fn_defaults, Some([-2, 0, 0, 1, 0, -3, -3, 0, 0]));
+}
+
+#[test]
+fn a_long_cover_number_takes_a_smaller_size() {
+    // YELLOW is too wide at the full size; GREEN keeps it.
+    let yellow = artwork::render_cine("RICOH", "CINEMA", "YELLOW").unwrap();
+    let green = artwork::render_cine("RICOH", "CINEMA", "GREEN").unwrap();
+    // The first and last rows with number ink (white) in the body below the name.
+    let rows = |rgba: &[u8]| {
+        let ink: Vec<usize> = (21..32)
+            .filter(|y| (0..40).any(|x| rgba[(y * 40 + x) * 4] > 200))
+            .collect();
+        (ink[0], *ink.last().unwrap())
+    };
+    let (top_y, bottom_y) = rows(&yellow);
+    let (top_g, bottom_g) = rows(&green);
+    assert!(bottom_y - top_y < bottom_g - top_g);
+    assert!(artwork::render_cine("RICOH", "CINEMA", "123456789").is_err());
 }

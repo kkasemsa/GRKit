@@ -1,14 +1,16 @@
 # GRKit site
 
-The site lets a user select a camera, the modules, and the effects, preview the effects, and download `GRKit.zip` or write it to an SD card. The browser builds the package with `grkit-wasm`. No server code runs.
+The site lets a user select a camera, the modules, and the effects, preview the effects, and download `GRKit.zip` or write it to an SD card. The browser builds the package with `grkit-wasm`. The only server code is the Cloudflare Pages worker of the root page, which sends a visitor to the page of their language.
 
 The site serves these files:
 
 | Path | Source |
 |---|---|
-| `index.html`, `assets/`, `_headers`, `THIRD_PARTY_LICENSES.txt` | `pnpm build` in this directory |
+| `index.html`, `zh-hans/`, `zh-hant/`, `ja/`, `ko/`, the `fastboot/` page of each, `404.html`, `sitemap.xml`, `robots.txt`, `_worker.js`, `_routes.json`, `assets/`, `_headers`, `THIRD_PARTY_LICENSES.txt` | `pnpm build` in this directory |
 | `runtime/<target>/` | `grkit site`, for each runtime build of `grkit release-plan` |
 | `effects/<target>/` | `grkit effects publish`, for each runtime build of `grkit release-plan` |
+
+Each language has its own page. `scripts/prerender.mjs` renders the first screen of each page into its HTML, with the canonical and hreflang links, so search engines read the text without the script. The worker (`src/edge.ts`) runs only for `/`. It sends the visitor to the language that they chose before, else to the browser language. The country of the IP address decides only when the browser sends no language.
 
 `THIRD_PARTY_LICENSES.txt` gives the licenses of the bundled JavaScript packages and fonts, and of the Rust crates in the WebAssembly module. `pnpm build` writes it with `scripts/third-party-licenses.mjs`. The script reads the JavaScript licenses from the Vite build and the crate licenses from `cargo metadata`, so Cargo must be on `PATH`.
 
@@ -54,6 +56,10 @@ The effects are fitted to the GR III, and LibRaw's color processing differs from
 
 LibRaw is distributed under CDDL-1.0. `THIRD_PARTY_LICENSES.txt` includes its notices and a link to its source.
 
+## Fast start
+
+The Fast start page (`/fastboot/` under each language page) makes the fast-boot firmware (`docs/fastboot.md`) from an official firmware update file that the user selects. `patchFirmware` of `grkit-wasm` refuses any other file and checks the result against its SHA-256. The file is not uploaded.
+
 ## LUT import
 
 The Import a LUT row at the end of the effect list, and the link under the selection buttons, open a dialog. The dialog fits a `.cube` file or a LUT image into an effect. It uses the fit of `grkit effects import` ([Import a LUT](../effects/README.md#import-a-lut)). The page fits over the `base_gamma` of the `gr3-2.10` catalog. A catalog without it hides the row and the link.
@@ -89,11 +95,11 @@ In card mode, Uninstall GRKit acts on the connected card. It shows only while th
 
 ## Default sample
 
-The default image is Snow in Akihabara by nagi usano, a GR IIIx JPEG under CC BY 2.0. `public/samples/akihabara.json` records its source, license, and hashes. The site includes the attribution in `THIRD_PARTY_LICENSES.txt`, and the preview links to the source.
+The default image is Sakiko buys a delicious soup at Kitchen Grizzly by MIKI Yoshihito, a GR IIIx JPEG under CC BY 2.0. `public/samples/kitchen-grizzly.json` records its source, license, and hashes. The site includes the attribution in `THIRD_PARTY_LICENSES.txt`, and the landing page credits the photo with a link to the source where it first shows.
 
-`public/samples/akihabara.grlinear` holds linear pixels that `scripts/build-sample.mjs` estimates from the JPEG. To make it again:
+`public/samples/kitchen-grizzly.grlinear` holds linear pixels that `scripts/build-sample.mjs` estimates from the JPEG. To make it again:
 
-1. Download the JPEG from the source URL in `public/samples/akihabara.json` to a directory outside the repository.
+1. Download the JPEG from the source URL in `public/samples/kitchen-grizzly.json` to a directory outside the repository.
 2. Get `effects/gr3-2.10/preview/standard.lut` from the site data, for example from the site archive of a release.
-3. From `web/`, run `node scripts/build-sample.mjs /path/to/Snow_in_Akihabara_2022-01-06.jpg /path/to/standard.lut`. The script checks the SHA-256 of the JPEG first.
+3. From `web/`, run `node scripts/build-sample.mjs '/path/to/Sakiko_buys_a_delicious_soup_at_Kitchen_Grizzly._(53311001084).jpg' /path/to/standard.lut`. The script checks the SHA-256 of the JPEG first.
 4. Run `pnpm test`. The sample test checks the hash, the attribution, the dimensions, and the pixel format.

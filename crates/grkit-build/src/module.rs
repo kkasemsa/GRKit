@@ -234,11 +234,17 @@ pub struct Manifest {
     /// with '?' first for an optional one.
     #[serde(default)]
     pub uses: Vec<String>,
+    /// The module loads only on a camera with a color sensor: GR IV
+    /// Monochrome does not load it (`GRKIT_MODULE_COLOR_ONLY`).
+    #[serde(default)]
+    pub color_only: bool,
     #[serde(default)]
     pub settings: Vec<SettingSpec>,
     pub page: Option<PageSpec>,
     #[serde(default)]
     pub layers: Vec<LayerSpec>,
+    #[serde(default)]
+    pub indicators: Vec<IndicatorSpec>,
     #[serde(default)]
     pub filters: Vec<FilterSpec>,
     pub events: Option<EventsSpec>,
@@ -264,16 +270,34 @@ pub struct SettingSpec {
     pub key: String,
     pub values: u32,
     #[serde(default)]
+    pub default: u32,
+    #[serde(default)]
     pub saved: bool,
     #[serde(default)]
     pub public: bool,
+    /// The rows of the setting show only on a camera with a color sensor:
+    /// GR IV Monochrome leaves them out (`GRKIT_SETTING_COLOR_ONLY`).
+    #[serde(default)]
+    pub color_only: bool,
 }
 
-/// A choice page of one setting: a key of `settings`, or a name of `uses`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PageKind {
+    #[default]
+    Choice,
+    Settings,
+    Group,
+}
+
+/// The module's root page: a choice, native settings, or a group of children.
 /// Its text is in `text/<language>.toml`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageSpec {
+    #[serde(default)]
+    pub kind: PageKind,
+    #[serde(default)]
     pub setting: String,
     /// Row 0 shows the Off icon instead of tile 0.
     #[serde(default)]
@@ -287,6 +311,87 @@ pub struct PageSpec {
     /// effects (`GRKIT_CHOICE_OPTIONS`).
     #[serde(default)]
     pub options: bool,
+    /// Native settings pages opened by the rows of a group.
+    #[serde(default)]
+    pub children: Vec<ChildPageSpec>,
+    /// The icon of row 0 (Off) of a choice page without `off_row`. The root
+    /// row keeps tile 0 while the setting is Off.
+    pub off_icon: Option<IconSpec>,
+    /// Fn on the row of one value of a choice page steps another setting
+    /// (`GrkitPage.fn_value` and `fn_setting`, ABI 2.5).
+    pub fn_cycle: Option<FnCycleSpec>,
+}
+
+/// Fn on the row of `value` in ADJ sets `setting` to its next value, and to
+/// 0 after the last one.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FnCycleSpec {
+    pub value: u32,
+    pub setting: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildPageSpec {
+    /// The key of the title in `children.<KEY>` in each text file.
+    pub key: String,
+    /// The first row is the setting that ADJ lists when OK opens the child:
+    /// value 0 is Off, and the others turn the child on.
+    pub settings: Vec<String>,
+    pub icon: Option<IconSpec>,
+}
+
+/// An ADJ child or viewfinder icon. Only one source is permitted.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IconSpec {
+    pub tile: Option<u32>,
+    pub setting: Option<String>,
+    pub first_tile: Option<u32>,
+    /// A core live-view label (`artwork::OVERLAY_LABELS`), for a status-row
+    /// indicator: a label name such as `DATE`; with a setting, value n shows
+    /// the nth label after it. `ratio` with `setting = "CORE.ASPECT"` shows
+    /// the label of each Framing ratio.
+    pub label: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionSpec {
+    pub setting: String,
+    pub equals: Option<u32>,
+    pub not_equals: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllConditions {
+    pub all: Vec<ConditionSpec>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+pub enum EnabledSpec {
+    Condition(ConditionSpec),
+    All(AllConditions),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorPlacement {
+    NativeSlot,
+    StatusRow,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndicatorSpec {
+    pub id: String,
+    pub placement: IndicatorPlacement,
+    pub slot: Option<String>,
+    pub enabled: EnabledSpec,
+    pub icon: IconSpec,
 }
 
 /// A `picture.plane` filter.
@@ -305,6 +410,8 @@ pub struct FilterSpec {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayerSpec {
+    /// Optional setting conditions, shared with indicator declarations.
+    pub enabled: Option<EnabledSpec>,
     /// The C function `void paint(const Surface *, u32 value)`.
     pub paint: String,
     /// The setting whose value the layer draws: a key of `settings`, or a
@@ -337,6 +444,14 @@ struct PageText {
     /// The rows of the native settings page (`PageSpec::settings`) by key.
     #[serde(default)]
     settings: std::collections::BTreeMap<String, RowText>,
+    #[serde(default)]
+    children: std::collections::BTreeMap<String, ChildPageText>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChildPageText {
+    title: String,
 }
 
 /// The text of a row of the native settings page.
@@ -419,6 +534,7 @@ fn read_text(directory: &Path, language: Language) -> Result<(PathBuf, PageText)
         .chain(&text.rows)
         .chain(text.summaries.iter().flatten())
         .chain(rows)
+        .chain(text.children.values().map(|child| &child.title))
     {
         if let Some(c) = language.undrawable(item) {
             bail!(
@@ -458,28 +574,59 @@ pub fn generate(directory: &Path) -> Result<(Manifest, String, String)> {
     let manifest: Manifest = read_toml(&directory.join("module.toml"))?;
     let m = &manifest;
     validate(m)?;
-    let tiles = read_tiles(directory, m)?;
+    // Check every tile now; build_manifest adds them to the module file.
+    read_tiles(directory, m)?;
     let header = header(m)?;
     let mut c = String::from(
         "/* Generated by grkit module build from module.toml. Do not edit. */\n#include \"grkit.h\"\n",
     );
     let mut registrations = Vec::new();
     if let Some(page) = &m.page {
-        if CORE_ROWS.contains(&page.setting.as_str()) {
+        if page.kind != PageKind::Group {
+            ensure!(page.children.is_empty(), "Only a group page has children");
+        }
+        ensure!(
+            page.off_icon.is_none()
+                || (page.kind == PageKind::Choice
+                    && !page.off_row
+                    && !CORE_ROWS.contains(&page.setting.as_str())),
+            "Only a choice page without off_row has an off_icon"
+        );
+        ensure!(
+            page.fn_cycle.is_none()
+                || (page.kind == PageKind::Choice && !CORE_ROWS.contains(&page.setting.as_str())),
+            "Only a choice page with its own rows has an fn_cycle"
+        );
+        if page.kind == PageKind::Group {
+            group_page(directory, m, page, &mut c)?;
+        } else if page.kind == PageKind::Settings {
+            settings_page(directory, m, page, &mut c)?;
+        } else if CORE_ROWS.contains(&page.setting.as_str()) {
             core_page(directory, m, page, &mut c)?;
         } else {
             choice_page(directory, m, page, &mut c)?;
         }
         registrations.push(registration("GRKIT_POINT_MENU_PAGE", "page"));
+        for i in 0..page.children.len() {
+            registrations.push(registration(
+                "GRKIT_POINT_MENU_PAGE",
+                &format!("page_child_{i}"),
+            ));
+        }
     }
     registrations.extend(layers(m, &mut c)?);
+    registrations.extend(indicators(m, &mut c)?);
     registrations.extend(filters(m, &mut c)?);
     registrations.extend(subscriber(m, &mut c)?);
     ensure!(
         !registrations.is_empty(),
-        "module.toml has no page, no layer, no filter, and no events"
+        "module.toml has no page, layer, indicator, filter, or events"
     );
-    descriptor(m, &registrations, &tiles, &mut c)?;
+    ensure!(
+        registrations.len() <= 16,
+        "A module has at most 16 registrations"
+    );
+    descriptor(m, &registrations, &mut c)?;
     Ok((manifest, c, header))
 }
 
@@ -508,10 +655,34 @@ fn validate(m: &Manifest) -> Result<()> {
             grkit_core::runtime::MODULE_SETTING_VALUES
         );
         ensure!(
+            setting.default < setting.values,
+            "Setting {} default is outside its values",
+            setting.key
+        );
+        ensure!(
             m.settings[..i].iter().all(|s| s.key != setting.key),
             "Setting {} is twice in module.toml",
             setting.key
         );
+    }
+    // A page needs its first row on every camera.
+    let color_only = |name: &str| m.settings.iter().any(|s| s.key == name && s.color_only);
+    if let Some(page) = &m.page {
+        let first = match page.kind {
+            PageKind::Choice => Some(page.setting.as_str()),
+            PageKind::Settings => page.settings.first().map(String::as_str),
+            PageKind::Group => None,
+        };
+        let children = page
+            .children
+            .iter()
+            .filter_map(|child| child.settings.first().map(String::as_str));
+        for name in first.into_iter().chain(children) {
+            ensure!(
+                !color_only(name),
+                "Setting {name} is color_only, so it cannot be the first row of a page"
+            );
+        }
     }
     for name in &m.uses {
         let full = name.strip_prefix('?').unwrap_or(name);
@@ -523,10 +694,12 @@ fn validate(m: &Manifest) -> Result<()> {
             "Invalid used setting {name:?}"
         );
     }
+    // INSTALL takes at most this many tiles from one module, and 128 from
+    // all modules together (MODULE_TILES_MAX).
     ensure!(
-        m.tiles.len() <= grkit_core::runtime::MODULE_TILES_MAX,
+        m.tiles.len() <= grkit_core::grm::MAX_TILES,
         "More than {} tiles",
-        grkit_core::runtime::MODULE_TILES_MAX
+        grkit_core::grm::MAX_TILES
     );
     Ok(())
 }
@@ -597,7 +770,10 @@ fn core_page(directory: &Path, m: &Manifest, page: &PageSpec, c: &mut String) ->
     for (l, language) in Language::ALL.into_iter().enumerate() {
         let (path, text) = read_text(directory, language)?;
         ensure!(
-            text.rows.is_empty() && text.summaries.is_none() && text.settings.is_empty(),
+            text.rows.is_empty()
+                && text.summaries.is_none()
+                && text.settings.is_empty()
+                && text.children.is_empty(),
             "{}: the core gives the rows of {}, so the text has only the title",
             path.display(),
             page.setting
@@ -623,6 +799,174 @@ struct SettingRow {
     /// The C reference of the setting (`setting_reference`).
     reference: String,
     values: usize,
+}
+
+/// An ADJ entry that opens its native settings directly, without a choice page.
+fn settings_page(directory: &Path, m: &Manifest, page: &PageSpec, c: &mut String) -> Result<()> {
+    ensure!(
+        page.setting.is_empty() && !page.off_row && !page.options,
+        "A settings page has no setting, off_row, or options"
+    );
+    let first = page
+        .settings
+        .first()
+        .context("A settings page needs at least one row")?;
+    ensure!(!m.tiles.is_empty(), "A settings page needs a module tile");
+    let (setting, own_values) = setting_reference(m, first)?;
+    let values = match own_values {
+        Some(values) => values,
+        None => used_values(directory, first)?,
+    };
+    let rows = setting_rows(directory, m, page, &setting, values)?;
+    for (l, language) in Language::ALL.into_iter().enumerate() {
+        let (path, text) = read_text(directory, language)?;
+        ensure!(
+            text.rows.is_empty() && text.summaries.is_none() && text.children.is_empty(),
+            "{}: a settings page has no choice rows, summaries, or child titles",
+            path.display()
+        );
+        writeln!(c, "static const u16 title_{l}[] = {};", utf16(&text.title)?)?;
+        setting_text(&path, &text, &rows, l, c)?;
+    }
+    text_table(c, "page_title", per_language("title".to_owned()))?;
+    let settings = setting_row_tables(&rows, c)?;
+    writeln!(c, "static const GrkitPage page = {{.size = sizeof(GrkitPage), .kind = GRKIT_PAGE_SETTINGS, .setting = {setting}, .title = page_title, .rows = {values}{settings}}};")?;
+    Ok(())
+}
+
+/// A group has one ADJ entry and one native settings page for each child.
+fn group_page(directory: &Path, m: &Manifest, page: &PageSpec, c: &mut String) -> Result<()> {
+    ensure!(
+        page.setting.is_empty() && page.settings.is_empty() && !page.off_row && !page.options,
+        "A group page has no setting, settings, off_row, or options"
+    );
+    ensure!(
+        (1..=4).contains(&page.children.len()),
+        "A group page needs 1 to 4 children"
+    );
+    ensure!(
+        m.tiles.len() > page.children.len(),
+        "A group page needs a module tile and one tile for each child"
+    );
+    let mut children = Vec::new();
+    for (i, child) in page.children.iter().enumerate() {
+        ensure!(valid_key(&child.key), "Invalid child key {:?}", child.key);
+        ensure!(
+            page.children[..i]
+                .iter()
+                .all(|other| other.key != child.key),
+            "Child {} is twice in module.toml",
+            child.key
+        );
+        let first = child
+            .settings
+            .first()
+            .with_context(|| format!("Child {} needs at least one settings row", child.key))?;
+        ensure!(
+            !m.uses
+                .iter()
+                .any(|name| name.strip_prefix('?') == Some(first.as_str())),
+            "Child {} cannot start with an optional setting",
+            child.key
+        );
+        let (setting, own_values) = setting_reference(m, first)?;
+        let values = match own_values {
+            Some(values) => values,
+            None => used_values(directory, first)?,
+        };
+        ensure!(
+            (2..=PAGE_ROWS).contains(&values),
+            "Child {} must start with a setting of 2 to {PAGE_ROWS} values, the first Off",
+            child.key
+        );
+        let child_page = PageSpec {
+            kind: PageKind::Settings,
+            setting: String::new(),
+            off_row: false,
+            settings: child.settings.clone(),
+            options: false,
+            children: Vec::new(),
+            off_icon: None,
+            fn_cycle: None,
+        };
+        let rows = setting_rows(directory, m, &child_page, &setting, values)?;
+        children.push((setting, values, rows));
+    }
+    let keys: std::collections::BTreeSet<_> = children
+        .iter()
+        .flat_map(|(_, _, rows)| rows.iter().map(|row| &row.key))
+        .collect();
+    for (l, language) in Language::ALL.into_iter().enumerate() {
+        let (path, text) = read_text(directory, language)?;
+        ensure!(
+            text.rows.is_empty() && text.summaries.is_none(),
+            "{}: a group page has no choice rows or summaries",
+            path.display()
+        );
+        ensure!(
+            text.children.len() == page.children.len(),
+            "{} must name the text of each group child",
+            path.display()
+        );
+        ensure!(
+            text.settings
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>()
+                == keys,
+            "{} must name the text of each group setting",
+            path.display()
+        );
+        writeln!(c, "static const u16 title_{l}[] = {};", utf16(&text.title)?)?;
+        for (i, (child, (_, _, rows))) in page.children.iter().zip(&children).enumerate() {
+            let title = &text
+                .children
+                .get(&child.key)
+                .with_context(|| format!("{} has no [children.{}]", path.display(), child.key))?
+                .title;
+            writeln!(
+                c,
+                "static const u16 child_{i}_title_{l}[] = {};",
+                utf16(title)?
+            )?;
+            native_setting_text(&path, &text, rows, l, &format!("child_{i}_"), c)?;
+        }
+    }
+    text_table(c, "page_title", per_language("title".to_owned()))?;
+    for (i, (setting, values, rows)) in children.iter().enumerate() {
+        text_table(
+            c,
+            &format!("child_{i}_page_title"),
+            per_language(format!("child_{i}_title")),
+        )?;
+        let settings = native_setting_tables(rows, &format!("child_{i}_"), c)?;
+        let icon = if let Some(spec) = &page.children[i].icon {
+            let name = format!("child_{i}_icon");
+            icon(m, spec, &name, false, c)?;
+            format!(", .icon = &{name}")
+        } else {
+            String::new()
+        };
+        writeln!(c, "static const GrkitPage page_child_{i} = {{.size = sizeof(GrkitPage), .kind = GRKIT_PAGE_SETTINGS, .setting = {setting}, .flags = GRKIT_PAGE_MENU_ONLY, .title = child_{i}_page_title, .rows = {values}{settings}{icon}}};")?;
+    }
+    writeln!(
+        c,
+        "static const GrkitPage *const page_children[] = {{{}}};",
+        (0..children.len())
+            .map(|i| format!("&page_child_{i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
+    writeln!(c, "static const GrkitPage page = {{.size = sizeof(GrkitPage), .kind = GRKIT_PAGE_GROUP, .setting = GRKIT_NO_SETTING, .title = page_title, .rows = {}, .children = page_children}};", children.len())?;
+    Ok(())
+}
+
+/// The descriptor of the icon of the Off row, and the field that names it.
+fn off_icon(m: &Manifest, page: &PageSpec, c: &mut String) -> Result<&'static str> {
+    let Some(spec) = &page.off_icon else {
+        return Ok("");
+    };
+    icon(m, spec, "page_off_icon", false, c)?;
+    Ok(", .icon = &page_off_icon")
 }
 
 /// A choice page: a row with a tile and a label for each value of its
@@ -653,6 +997,7 @@ fn choice_page(directory: &Path, m: &Manifest, page: &PageSpec, c: &mut String) 
         !page.options || values <= OPTION_VALUES,
         "A page with options has at most {OPTION_VALUES} values"
     );
+    let fn_cycle = fn_cycle(m, page, values)?;
     let rows = setting_rows(directory, m, page, &setting, values)?;
     for (l, language) in Language::ALL.into_iter().enumerate() {
         choice_text(directory, page, values, &rows, l, language, c)?;
@@ -674,11 +1019,39 @@ fn choice_page(directory: &Path, m: &Manifest, page: &PageSpec, c: &mut String) 
         (true, false) => "GRKIT_CHOICE_OFF_ROW",
         _ => "0",
     };
+    let off_icon = off_icon(m, page, c)?;
     writeln!(
         c,
-        "static const GrkitPage page = {{.size = sizeof(GrkitPage), .kind = GRKIT_PAGE_CHOICE, .setting = {setting}, .flags = {flags}, .title = page_title, .summaries = page_summaries, .labels = page_labels, .rows = {values}{settings}}};"
+        "static const GrkitPage page = {{.size = sizeof(GrkitPage), .kind = GRKIT_PAGE_CHOICE, .setting = {setting}, .flags = {flags}, .title = page_title, .summaries = page_summaries, .labels = page_labels, .rows = {values}{settings}{off_icon}{fn_cycle}}};"
     )?;
     Ok(())
+}
+
+/// The Fn fields of a choice page with `values` rows: the value of the row
+/// and the setting that Fn steps on it. The installer checks the values of a
+/// used setting.
+fn fn_cycle(m: &Manifest, page: &PageSpec, values: usize) -> Result<String> {
+    let Some(spec) = &page.fn_cycle else {
+        return Ok(String::new());
+    };
+    ensure!(
+        spec.value > 0 && (spec.value as usize) < values,
+        "fn_cycle names a value of the page other than Off (1 to {})",
+        values - 1
+    );
+    ensure!(
+        spec.setting != page.setting,
+        "fn_cycle names a setting other than the page setting"
+    );
+    let (reference, count) = setting_reference(m, &spec.setting)?;
+    ensure!(
+        count.is_none_or(|count| count >= 2),
+        "fn_cycle names a setting with at least 2 values"
+    );
+    Ok(format!(
+        ", .fn_value = {}, .fn_setting = {reference}",
+        spec.value
+    ))
 }
 
 /// The rows of the native settings page. Row 0 is the page setting, also a
@@ -702,7 +1075,7 @@ fn setting_rows(
     for (i, key) in page.settings.iter().enumerate() {
         let (reference, count) = if i == 0 {
             ensure!(
-                key == &page.setting,
+                page.kind == PageKind::Settings || key == &page.setting,
                 "The first native settings row is the page setting"
             );
             (setting.to_owned(), values)
@@ -765,6 +1138,11 @@ fn choice_text(
 ) -> Result<()> {
     let (path, text) = read_text(directory, language)?;
     ensure!(
+        text.children.is_empty(),
+        "{}: only a group page has child titles",
+        path.display()
+    );
+    ensure!(
         text.rows.len() == values,
         "{} has {} rows, and {} has {values} values",
         path.display(),
@@ -789,6 +1167,16 @@ fn choice_text(
             utf16(&format!("{}{separator}{value}", text.title))?
         )?;
     }
+    setting_text(&path, &text, rows, l, c)
+}
+
+fn setting_text(
+    path: &Path,
+    text: &PageText,
+    rows: &[SettingRow],
+    l: usize,
+    c: &mut String,
+) -> Result<()> {
     ensure!(
         text.settings.len() == rows.len(),
         "{} names the text of {} native settings rows, and the page has {}",
@@ -796,6 +1184,17 @@ fn choice_text(
         text.settings.len(),
         rows.len()
     );
+    native_setting_text(path, text, rows, l, "", c)
+}
+
+fn native_setting_text(
+    path: &Path,
+    text: &PageText,
+    rows: &[SettingRow],
+    l: usize,
+    prefix: &str,
+    c: &mut String,
+) -> Result<()> {
     for (r, row) in rows.iter().enumerate() {
         let key = &row.key;
         let row_text = text
@@ -804,7 +1203,7 @@ fn choice_text(
             .with_context(|| format!("{} has no [settings.{key}]", path.display()))?;
         writeln!(
             c,
-            "static const u16 row_{r}_{l}[] = {};",
+            "static const u16 {prefix}row_{r}_{l}[] = {};",
             utf16(&row_text.label)?
         )?;
         let texts = match (&row_text.values, r) {
@@ -820,7 +1219,11 @@ fn choice_text(
             row.values
         );
         for (v, value) in texts.iter().enumerate() {
-            writeln!(c, "static const u16 row_{r}_{v}_{l}[] = {};", utf16(value)?)?;
+            writeln!(
+                c,
+                "static const u16 {prefix}row_{r}_{v}_{l}[] = {};",
+                utf16(value)?
+            )?;
         }
     }
     Ok(())
@@ -829,16 +1232,20 @@ fn choice_text(
 /// The tables of the native settings rows (`GrkitSettingRow`). Return the
 /// fields of `GrkitPage` that refer to them, empty without rows.
 fn setting_row_tables(rows: &[SettingRow], c: &mut String) -> Result<String> {
+    native_setting_tables(rows, "", c)
+}
+
+fn native_setting_tables(rows: &[SettingRow], prefix: &str, c: &mut String) -> Result<String> {
     for (r, row) in rows.iter().enumerate() {
         text_table(
             c,
-            &format!("row_{r}_label"),
-            per_language(format!("row_{r}")),
+            &format!("{prefix}row_{r}_label"),
+            per_language(format!("{prefix}row_{r}")),
         )?;
         text_table(
             c,
-            &format!("row_{r}_values"),
-            (0..row.values).flat_map(move |v| per_language(format!("row_{r}_{v}"))),
+            &format!("{prefix}row_{r}_values"),
+            (0..row.values).flat_map(move |v| per_language(format!("{prefix}row_{r}_{v}"))),
         )?;
     }
     if rows.is_empty() {
@@ -849,20 +1256,215 @@ fn setting_row_tables(rows: &[SettingRow], c: &mut String) -> Result<String> {
         .enumerate()
         .map(|(r, row)| {
             format!(
-                "{{.size = sizeof(GrkitSettingRow), .setting = {}, .label = row_{r}_label, .values = row_{r}_values}}",
+                "{{.size = sizeof(GrkitSettingRow), .setting = {}, .label = {prefix}row_{r}_label, .values = {prefix}row_{r}_values}}",
                 row.reference
             )
         })
         .collect();
     writeln!(
         c,
-        "static const GrkitSettingRow page_settings[] = {{{}}};",
+        "static const GrkitSettingRow {prefix}page_settings[] = {{{}}};",
         entries.join(", ")
     )?;
     Ok(format!(
-        ", .setting_rows = {}, .settings = page_settings",
+        ", .setting_rows = {}, .settings = {prefix}page_settings",
         rows.len()
     ))
+}
+
+/// A used setting may have a runtime-defined value count. The installer
+/// validates that count after resolving module dependencies.
+fn known_setting_values(m: &Manifest, name: &str) -> Option<u32> {
+    m.settings
+        .iter()
+        .find(|setting| setting.key == name)
+        .map(|setting| setting.values)
+        .or_else(|| {
+            grkit_core::capabilities::CAPABILITIES
+                .iter()
+                .find(|capability| capability.name() == name && capability.values > 0)
+                .map(|capability| capability.values)
+        })
+}
+
+/// Generate a shared, context-independent icon descriptor.
+/// The GrkitIcon `name`. `labels` allows a core label: only a status-row
+/// indicator draws one.
+fn icon(m: &Manifest, spec: &IconSpec, name: &str, labels: bool, c: &mut String) -> Result<()> {
+    let (kind, setting, first_tile) = match (&spec.setting, spec.tile, spec.first_tile, &spec.label)
+    {
+        (_, _, _, Some(label)) => {
+            ensure!(labels, "Only a status_row indicator shows a core label");
+            ensure!(
+                spec.tile.is_none() && spec.first_tile.is_none(),
+                "A label icon has no tile or first_tile"
+            );
+            let first = |name: &str| -> Result<u32> {
+                grkit_core::artwork::OVERLAY_LABELS
+                    .iter()
+                    .skip(1)
+                    .position(|candidate| *candidate == name)
+                    .map(|index| index as u32 + 1)
+                    .with_context(|| format!("No core label {name:?}"))
+            };
+            match spec.setting.as_deref() {
+                // Label n names Framing ratio n, the capture area of CORE.ASPECT n.
+                Some("CORE.ASPECT") if label == "ratio" => {
+                    let (setting, _) = setting_reference(m, "CORE.ASPECT")?;
+                    ("GRKIT_ICON_LABEL", setting, 0)
+                }
+                // Value n shows the nth label after `label`.
+                Some(key) => {
+                    let (setting, _) = setting_reference(m, key)?;
+                    let first = first(label)?;
+                    let values = known_setting_values(m, key).with_context(|| {
+                        format!("The values of {key} are unknown, so its labels cannot be checked")
+                    })?;
+                    ensure!(
+                        first as usize + values as usize
+                            <= grkit_core::artwork::OVERLAY_LABELS.len(),
+                        "{key} has {values} values, more than the labels from {label:?}"
+                    );
+                    ("GRKIT_ICON_LABEL", setting, first)
+                }
+                None => (
+                    "GRKIT_ICON_LABEL",
+                    "GRKIT_NO_SETTING".to_owned(),
+                    first(label)?,
+                ),
+            }
+        }
+        (None, Some(tile), None, None) => ("GRKIT_ICON_TILE", "GRKIT_NO_SETTING".to_owned(), tile),
+        (Some(key), None, first_tile, None) => {
+            let (setting, _) = setting_reference(m, key)?;
+            if key == "CORE.TONE" {
+                ensure!(first_tile.is_none(), "A CORE.TONE icon has no first_tile");
+                ("GRKIT_ICON_TONE", setting, 0)
+            } else {
+                let first = first_tile.unwrap_or(0);
+                if let Some(values) = known_setting_values(m, key) {
+                    ensure!(
+                        u64::from(first) + u64::from(values) <= m.tiles.len() as u64,
+                        "Icon of {key} needs {values} tiles starting at {first}"
+                    );
+                }
+                ("GRKIT_ICON_TILE", setting, first)
+            }
+        }
+        _ => {
+            anyhow::bail!("An icon has either tile or setting, with first_tile only for a setting")
+        }
+    };
+    ensure!(
+        kind != "GRKIT_ICON_TILE" || (first_tile as usize) < m.tiles.len(),
+        "Icon tile {first_tile} is outside the module tiles"
+    );
+    writeln!(c, "static const GrkitIcon {name} = {{.size = sizeof(GrkitIcon), .kind = {kind}, .setting = {setting}, .first_tile = {first_tile}}};")?;
+    Ok(())
+}
+
+/// Generate setting conditions shared by indicators and overlay layers.
+fn conditions(m: &Manifest, enabled: &EnabledSpec, name: &str, c: &mut String) -> Result<usize> {
+    let conditions = match enabled {
+        EnabledSpec::Condition(condition) => std::slice::from_ref(condition),
+        EnabledSpec::All(conditions) => conditions.all.as_slice(),
+    };
+    ensure!(
+        (1..=4).contains(&conditions.len()),
+        "Enabled needs 1 to 4 conditions"
+    );
+    writeln!(c, "static const GrkitCondition {name}[] = {{")?;
+    for condition in conditions {
+        let (setting, _) = setting_reference(m, &condition.setting)?;
+        let (comparison, value) = match (condition.equals, condition.not_equals) {
+            (Some(value), None) => ("GRKIT_CONDITION_EQUALS", value),
+            (None, Some(value)) => ("GRKIT_CONDITION_NOT_EQUALS", value),
+            _ => anyhow::bail!("An enabled condition has exactly one of equals or not_equals"),
+        };
+        if let Some(values) = known_setting_values(m, &condition.setting) {
+            ensure!(
+                value < values,
+                "Enabled value {value} is outside setting {}",
+                condition.setting
+            );
+        }
+        writeln!(
+            c,
+            "{{.setting = {setting}, .comparison = {comparison}, .value = {value}}},"
+        )?;
+    }
+    writeln!(c, "}};")?;
+    Ok(conditions.len())
+}
+
+/// Viewfinder indicators are declarative registrations. The core owns
+/// placement, display policy, and redraw; modules provide no paint callback.
+fn indicators(m: &Manifest, c: &mut String) -> Result<Vec<String>> {
+    let mut registrations = Vec::new();
+    let mut slots = std::collections::BTreeSet::new();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut status_rows = 0;
+    for (i, indicator) in m.indicators.iter().enumerate() {
+        ensure!(
+            !indicator.id.is_empty()
+                && indicator.id.len() <= 32
+                && indicator
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "Invalid indicator ID {:?}: use 1 to 32 lowercase letters, digits, or underscores",
+            indicator.id
+        );
+        ensure!(
+            ids.insert(&indicator.id),
+            "Duplicate indicator ID {}",
+            indicator.id
+        );
+        let (placement, slot) = match indicator.placement {
+            IndicatorPlacement::NativeSlot => {
+                ensure!(
+                    indicator.slot.as_deref() == Some("image_control"),
+                    "A native_slot indicator needs slot = image_control"
+                );
+                ensure!(
+                    slots.insert("image_control"),
+                    "More than one indicator uses image_control"
+                );
+                ("GRKIT_INDICATOR_NATIVE_SLOT", "GRKIT_SLOT_IMAGE_CONTROL")
+            }
+            IndicatorPlacement::StatusRow => {
+                ensure!(
+                    indicator.slot.is_none(),
+                    "A status_row indicator has no slot"
+                );
+                status_rows += 1;
+                ensure!(
+                    status_rows <= 6,
+                    "At most 6 status_row indicators fit the viewfinder"
+                );
+                ("GRKIT_INDICATOR_STATUS_ROW", "0")
+            }
+        };
+        let count = conditions(
+            m,
+            &indicator.enabled,
+            &format!("indicator_{i}_conditions"),
+            c,
+        )?;
+        icon(
+            m,
+            &indicator.icon,
+            &format!("indicator_{i}_icon"),
+            matches!(indicator.placement, IndicatorPlacement::StatusRow),
+            c,
+        )?;
+        writeln!(c, "static const GrkitIndicator indicator_{i} = {{.size = sizeof(GrkitIndicator), .placement = {placement}, .slot = {slot}, .condition_count = {}, .conditions = indicator_{i}_conditions, .icon = &indicator_{i}_icon}};", count)?;
+        registrations.push(registration(
+            "GRKIT_POINT_VIEWFINDER_INDICATOR",
+            &format!("indicator_{i}"),
+        ));
+    }
+    Ok(registrations)
 }
 
 /// The overlay layers (`GrkitLayer`). Return their registrations.
@@ -895,10 +1497,17 @@ fn layers(m: &Manifest, c: &mut String) -> Result<Vec<String>> {
         } else {
             flags.join(" | ")
         };
+        let (condition_count, condition_pointer) = match &layer.enabled {
+            Some(enabled) => {
+                let name = format!("layer_{i}_conditions");
+                (conditions(m, enabled, &name, c)?, name)
+            }
+            None => (0, "0".to_owned()),
+        };
         writeln!(c, "void {paint}(const Surface *s, u32 value);")?;
         writeln!(
             c,
-            "static const GrkitLayer layer_{i} = {{.size = sizeof(GrkitLayer), .flags = {flags}, .paint = {paint}, .setting = {setting}, .order = {}}};",
+            "static const GrkitLayer layer_{i} = {{.size = sizeof(GrkitLayer), .flags = {flags}, .paint = {paint}, .setting = {setting}, .order = {}, .condition_count = {condition_count}, .conditions = {condition_pointer}}};",
             layer.order
         )?;
         registrations.push(registration(
@@ -961,8 +1570,8 @@ fn subscriber(m: &Manifest, c: &mut String) -> Result<Option<String>> {
 }
 
 /// The module descriptor (`GrkitModule`) with its registrations, settings,
-/// used settings, and tiles.
-fn descriptor(m: &Manifest, registrations: &[String], tiles: &[u8], c: &mut String) -> Result<()> {
+/// used settings, and tile count.
+fn descriptor(m: &Manifest, registrations: &[String], c: &mut String) -> Result<()> {
     writeln!(
         c,
         "static const GrkitRegistration registrations[] = {{{}}};",
@@ -977,15 +1586,22 @@ fn descriptor(m: &Manifest, registrations: &[String], tiles: &[u8], c: &mut Stri
             .settings
             .iter()
             .map(|s| {
-                let flags = match (s.saved, s.public) {
-                    (true, true) => "GRKIT_SETTING_SAVED | GRKIT_SETTING_PUBLIC",
-                    (true, false) => "GRKIT_SETTING_SAVED",
-                    (false, true) => "GRKIT_SETTING_PUBLIC",
-                    (false, false) => "0",
+                let flags: Vec<_> = [
+                    (s.saved, "GRKIT_SETTING_SAVED"),
+                    (s.public, "GRKIT_SETTING_PUBLIC"),
+                    (s.color_only, "GRKIT_SETTING_COLOR_ONLY"),
+                ]
+                .into_iter()
+                .filter_map(|(set, flag)| set.then_some(flag))
+                .collect();
+                let flags = if flags.is_empty() {
+                    "0".to_owned()
+                } else {
+                    flags.join(" | ")
                 };
                 format!(
-                    "{{.size = sizeof(GrkitSetting), .key = \"{}\", .values = {}, .flags = {flags}}}",
-                    s.key, s.values
+                    "{{.size = sizeof(GrkitSetting), .key = \"{}\", .values = {}, .flags = {flags}, .default_value = {}}}",
+                    s.key, s.values, s.default
                 )
             })
             .collect();
@@ -1009,16 +1625,13 @@ fn descriptor(m: &Manifest, registrations: &[String], tiles: &[u8], c: &mut Stri
         )?;
         write!(fields, ", .uses = uses, .use_count = {}", m.uses.len())?;
     }
-    if !tiles.is_empty() {
-        c.push_str("static const u8 tiles[] __attribute__((aligned(4))) = {");
-        for (i, byte) in tiles.iter().enumerate() {
-            if i % 32 == 0 {
-                c.push('\n');
-            }
-            write!(c, "{byte},")?;
-        }
-        c.push_str("\n};\n");
-        write!(fields, ", .tiles = tiles, .tile_count = {}", m.tiles.len())?;
+    // The tiles follow the module file (`grm::Module::tiles`), so the
+    // descriptor gives their count and no address.
+    if !m.tiles.is_empty() {
+        write!(fields, ", .tile_count = {}", m.tiles.len())?;
+    }
+    if m.color_only {
+        fields.push_str(", .flags = GRKIT_MODULE_COLOR_ONLY");
     }
     writeln!(
         c,
@@ -1045,6 +1658,7 @@ pub fn build_manifest(
             directory
                 .join(source)
                 .canonicalize()
+                .map(crate::plain_path)
                 .with_context(|| format!("Read {source}"))?,
         );
     }
@@ -1058,6 +1672,8 @@ pub fn build_manifest(
         tools,
     )?;
     module.order = manifest.order;
+    module.tiles = read_tiles(directory, &manifest)?;
+    module.validate()?;
     Ok(module)
 }
 
@@ -1142,6 +1758,11 @@ mod tests {
         let tile_bytes = (TILE_SIDE * TILE_SIDE * 4) as u64;
         assert_eq!(define("module_link.h", "GRM_TILE_BYTES"), tile_bytes);
         assert_eq!(define("sdk/grkit.h", "GRKIT_TILE_BYTES"), tile_bytes);
+        assert_eq!(tile_bytes, grkit_core::grm::TILE_BYTES as u64);
+        assert_eq!(
+            define("module_link.h", "GRM_TILES"),
+            grkit_core::grm::MAX_TILES as u64
+        );
         assert_eq!(define("module_link.h", "GRM_PAGE_ROWS"), PAGE_ROWS as u64);
         assert_eq!(define("module_link.h", "GRM_TEXT_UNITS"), TEXT_UNITS as u64);
         assert_eq!(

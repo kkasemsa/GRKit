@@ -6,10 +6,14 @@ summaries = ["オフ", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "7:6"]
 [settings."CORE.ASPECT"]
 label = "アスペクト比"
 
+[settings."CORE.ASPECT_MODE"]
+label = "モード"
+values = ["切り抜き", "構図ガイドのみ"]
+
 [settings.MASK]
 label = "マスク"
 values = ["ダーク", "ブラック", "枠線"]
 
 [settings.LABEL]
-label = "比率表示"
+label = "アイコン表示"
 values = ["オン", "オフ"]

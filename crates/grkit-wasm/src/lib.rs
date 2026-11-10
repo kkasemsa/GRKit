@@ -110,6 +110,55 @@ pub fn import_lut_with_progress(
     })
 }
 
+/// A look that `native_looks` read from a GR IV firmware file of the user.
+pub struct NativeEffect {
+    /// The GR IV version of the file.
+    pub version: &'static str,
+    pub id: String,
+    pub name: String,
+    /// The effect.json text, as `grkit effects native` writes it.
+    pub definition: String,
+    /// The compiled `.GRF` effect for the package.
+    pub blob: Vec<u8>,
+    /// The RAW preview table with the look's default tone steps.
+    pub preview: Vec<u8>,
+    /// The tone curves of the preview (`site::ToneCurves::to_values`), or none for a look
+    /// without default tone steps. `effect_preview` draws the preview again from them.
+    pub tone: Vec<u16>,
+    /// The ADJ icon: 40 x 40 RGBA pixels.
+    pub icon: Vec<u8>,
+    pub monochrome: bool,
+}
+
+/// Reads the GR IV looks (`gr4_looks::LOOKS`) from an official GR IV zip or its firmware
+/// file. The page keeps the file in the browser. `base_gamma` is the table of the
+/// site catalog, for the previews.
+pub fn native_looks(bytes: &[u8], base_gamma: &[u16]) -> Result<Vec<NativeEffect>> {
+    let base_gamma = site::base_gamma(base_gamma)?;
+    let image = grkit_core::gr4_looks::Image::read(bytes)?;
+    let tables = image.tone_tables()?;
+    image
+        .definitions()?
+        .into_iter()
+        .map(|definition| {
+            let blob = effects::compile_definition(&definition)?;
+            let (effect, icon) = effects::decode(&blob)?;
+            let curves = site::native_tone_curves(&effect, &tables);
+            Ok(NativeEffect {
+                version: image.source.version,
+                preview: site::native_preview_lut(&base_gamma, &effect, curves.as_ref())?,
+                tone: curves.map(|curves| curves.to_values()).unwrap_or_default(),
+                monochrome: effect.monochrome(),
+                id: effect.id,
+                name: effect.name,
+                definition: serde_json::to_string_pretty(&definition)?,
+                blob,
+                icon,
+            })
+        })
+        .collect()
+}
+
 /// The input that a LUT most likely expects, from its data alone: see `fit::guess_input`.
 pub fn guess_input(bytes: &[u8], base_gamma: &[u16]) -> Result<&'static str> {
     let base_gamma = lut_inputs(bytes, base_gamma)?;
@@ -143,6 +192,8 @@ pub struct Builder {
     camera: &'static Camera,
     language: Language,
     guide: Option<Vec<u8>>,
+    /// The import library of the site (`grkit_core::imports`), which the camera does not read.
+    imports: Option<Vec<u8>>,
 }
 
 impl Builder {
@@ -156,6 +207,7 @@ impl Builder {
             camera: &camera::GR3,
             language: Language::English,
             guide: None,
+            imports: None,
         })
     }
 
@@ -236,6 +288,14 @@ impl Builder {
         self.guide = Some(pdf.to_vec());
     }
 
+    /// Sets the import library of the package (`grkit_core::imports`). The package keeps it for
+    /// another browser, and the camera does not read it.
+    pub fn set_imports(&mut self, library: &[u8]) -> Result<()> {
+        grkit_core::imports::decode(library)?;
+        self.imports = Some(library.to_vec());
+        Ok(())
+    }
+
     /// Verifies each runtime build against its manifest and returns the verified
     /// package ZIP.
     pub fn build(&self) -> Result<Vec<u8>> {
@@ -244,7 +304,7 @@ impl Builder {
             .iter()
             .map(|build| packaging::load_runtime(&build.manifest, &build.files))
             .collect::<Result<Vec<_>>>()?;
-        let package = packaging::assemble(
+        let package = packaging::assemble_with(
             &runtimes,
             &self.effects,
             &self.modules,
@@ -255,6 +315,9 @@ impl Builder {
                     .guide
                     .as_deref()
                     .context("Set the installation guide first")?,
+            },
+            packaging::Extras {
+                imports: self.imports.as_deref(),
             },
         )?;
         Ok(package.bytes)
@@ -285,6 +348,35 @@ pub fn effect_label(blob: &[u8]) -> Result<Label> {
         icon,
         monochrome: effect.flags & effects::MONOCHROME != 0,
     })
+}
+
+/// A compiled `.GRF` effect with a new name, and a new icon when `icon` is given (40 x 40 RGBA
+/// pixels, as `iconPixels` gives them). The ID, and so the file name and the ImageTone code of the
+/// effect, stay, so the camera keeps its Fn adjustments.
+pub fn relabel_effect(blob: &[u8], name: &str, icon: Option<&[u8]>) -> Result<Vec<u8>> {
+    let (mut effect, own_icon) = effects::decode(blob)?;
+    effects::check_identity(&effect.id, name)?;
+    effect.name = name.to_owned();
+    effect.encode(icon.unwrap_or(&own_icon))
+}
+
+/// The files that a GRKit ZIP of any release puts on the card, at their paths from the card
+/// root, so the page can read the ZIP as a card (`packaging::package_files`).
+pub fn package_files(bytes: &[u8]) -> Result<Files> {
+    packaging::package_files(bytes)
+}
+
+/// The RAW preview table of a compiled `.GRF` effect over `base_gamma`, the table of the site
+/// catalog. Without `tone`, it is the table that `import_lut` gives for the same effect. With
+/// the tone curves of a native look (`NativeEffect::tone`), it is the table of its unlock.
+pub fn effect_preview(blob: &[u8], base_gamma: &[u16], tone: &[u16]) -> Result<Vec<u8>> {
+    let base_gamma = site::base_gamma(base_gamma)?;
+    let (effect, _) = effects::decode(blob)?;
+    let curves = match tone {
+        [] => None,
+        values => Some(site::ToneCurves::from_values(values)?),
+    };
+    site::native_preview_lut(&base_gamma, &effect, curves.as_ref())
 }
 
 /// Builds a GRKit SD package from the runtime build of each firmware build of
@@ -364,6 +456,13 @@ impl Package {
         self.0.set_guide(pdf);
     }
 
+    /// Sets the import library (`ImportLibrary.bytes`), which the package keeps for another
+    /// browser. The camera does not read it.
+    #[wasm_bindgen(js_name = setImports)]
+    pub fn set_imports(&mut self, library: &[u8]) -> Result<(), JsError> {
+        self.0.set_imports(library).map_err(js_error)
+    }
+
     /// Returns the verified package as ZIP bytes.
     pub fn build(&self) -> Result<Vec<u8>, JsError> {
         self.0.build().map_err(js_error)
@@ -441,6 +540,97 @@ pub fn effect_label_js(blob: &[u8]) -> Result<EffectLabel, JsError> {
     effect_label(blob).map(EffectLabel).map_err(js_error)
 }
 
+/// Returns a compiled `.GRF` effect with the name `name`, and with `icon` (40 x 40 RGBA pixels
+/// from `iconPixels`) as its icon when it is given. The ID stays. It fails for a file that is not
+/// an effect, a name that the camera cannot show, or an icon of another size.
+#[wasm_bindgen(js_name = relabelEffect)]
+pub fn relabel_effect_js(
+    blob: &[u8],
+    name: &str,
+    icon: Option<Vec<u8>>,
+) -> Result<Vec<u8>, JsError> {
+    relabel_effect(blob, name, icon.as_deref()).map_err(js_error)
+}
+
+/// Returns the files that a GRKit ZIP of any release puts on the card, at their paths from the
+/// card root, in path order. It fails for a file that is not a ZIP within the package limits.
+#[wasm_bindgen(js_name = packageFiles)]
+pub fn package_files_js(bytes: &[u8]) -> Result<Vec<CardFile>, JsError> {
+    package_files(bytes)
+        .map(|files| {
+            files
+                .into_iter()
+                .map(|(path, bytes)| CardFile { path, bytes })
+                .collect()
+        })
+        .map_err(js_error)
+}
+
+/// Collects the imports of a browser for the import library of a package
+/// (`grkit_core::imports`).
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct ImportLibrary(Vec<grkit_core::imports::Import>);
+
+#[wasm_bindgen]
+impl ImportLibrary {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds an import: the JSON object text of its details and its compiled `.GRF` effect.
+    pub fn add(&mut self, details: String, effect: Vec<u8>) {
+        self.0.push(grkit_core::imports::Import { details, effect });
+    }
+
+    /// Returns the library file. It fails for details that are not a JSON object, an effect
+    /// that is not complete, or an ID that occurs twice.
+    pub fn bytes(&self) -> Result<Vec<u8>, JsError> {
+        grkit_core::imports::encode(&self.0).map_err(js_error)
+    }
+}
+
+/// One import of an import library. See `readImportLibrary`.
+#[wasm_bindgen]
+pub struct LibraryImport(grkit_core::imports::Import);
+
+#[wasm_bindgen]
+impl LibraryImport {
+    /// The JSON object text of the details.
+    #[wasm_bindgen(getter)]
+    pub fn details(&self) -> String {
+        self.0.details.clone()
+    }
+
+    /// The compiled `.GRF` effect.
+    #[wasm_bindgen(getter)]
+    pub fn effect(&self) -> Vec<u8> {
+        self.0.effect.clone()
+    }
+}
+
+/// Returns the imports of an import library file, in file order. It fails for a file that is
+/// not a complete library.
+#[wasm_bindgen(js_name = readImportLibrary)]
+pub fn read_import_library(bytes: &[u8]) -> Result<Vec<LibraryImport>, JsError> {
+    grkit_core::imports::decode(bytes)
+        .map(|imports| imports.into_iter().map(LibraryImport).collect())
+        .map_err(js_error)
+}
+
+/// Returns the RAW preview table of a compiled `.GRF` effect. `baseGamma` is the `base_gamma`
+/// array of the site catalog. `tone` is empty, or the tone curves of a native look
+/// (`NativeLookEffect.tone`).
+#[wasm_bindgen(js_name = effectPreview)]
+pub fn effect_preview_js(
+    blob: &[u8],
+    base_gamma: &[u16],
+    tone: &[u16],
+) -> Result<Vec<u8>, JsError> {
+    effect_preview(blob, base_gamma, tone).map_err(js_error)
+}
+
 /// Returns the ZIP that turns SD scripts off on a camera, by
 /// its key in `CAMERA_RELEASES` (`generated/cameras.ts`).
 #[wasm_bindgen(js_name = scriptsOffPackage)]
@@ -461,6 +651,75 @@ pub fn scripts_off_files(camera: &str) -> Result<Vec<CardFile>, JsError> {
                 .map(|(path, bytes)| CardFile { path, bytes })
                 .collect()
         })
+        .map_err(js_error)
+}
+
+/// A look of a GR IV firmware file. See `nativeLooks`.
+#[wasm_bindgen(js_name = NativeLookEffect)]
+pub struct NativeLookEffect(NativeEffect);
+
+#[wasm_bindgen(js_class = NativeLookEffect)]
+impl NativeLookEffect {
+    /// The GR IV version of the file, such as `1.20`.
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> String {
+        self.0.version.to_owned()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.0.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.0.name.clone()
+    }
+
+    /// The effect.json text.
+    #[wasm_bindgen(getter)]
+    pub fn definition(&self) -> String {
+        self.0.definition.clone()
+    }
+
+    /// The compiled `.GRF` effect, for `Package.addEffect`.
+    #[wasm_bindgen(getter)]
+    pub fn blob(&self) -> Vec<u8> {
+        self.0.blob.clone()
+    }
+
+    /// The RAW preview table: 33 x 33 x 33 RGB bytes over sRGB-shaped linear input.
+    #[wasm_bindgen(getter)]
+    pub fn preview(&self) -> Vec<u8> {
+        self.0.preview.clone()
+    }
+
+    /// The tone curves of the preview, empty for a look without default tone steps. Keep them
+    /// to draw the preview again with `effectPreview`.
+    #[wasm_bindgen(getter)]
+    pub fn tone(&self) -> Vec<u16> {
+        self.0.tone.clone()
+    }
+
+    /// The ADJ icon: 40 x 40 RGBA pixels.
+    #[wasm_bindgen(getter)]
+    pub fn icon(&self) -> Vec<u8> {
+        self.0.icon.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn monochrome(&self) -> bool {
+        self.0.monochrome
+    }
+}
+
+/// Reads the GR IV looks from an official GR IV zip or its firmware file, which the user
+/// chose. `baseGamma` is the `base_gamma` array of the site catalog. It
+/// decodes about 40 MB, so call it from a Worker.
+#[wasm_bindgen(js_name = nativeLooks)]
+pub fn native_looks_js(bytes: &[u8], base_gamma: &[u16]) -> Result<Vec<NativeLookEffect>, JsError> {
+    native_looks(bytes, base_gamma)
+        .map(|looks| looks.into_iter().map(NativeLookEffect).collect())
         .map_err(js_error)
 }
 
@@ -584,4 +843,51 @@ pub fn hald_image(level: usize) -> Result<Vec<u8>, JsError> {
 
 fn js_error(error: anyhow::Error) -> JsError {
     JsError::new(&format!("{error:#}"))
+}
+
+/// A fast-boot update file (`grkit_firmware`), which the page writes under the name of
+/// the official file.
+#[wasm_bindgen]
+pub struct FastbootFirmware(grkit_firmware::Patched);
+
+#[wasm_bindgen]
+impl FastbootFirmware {
+    /// The release, such as `gr3-2.10`.
+    #[wasm_bindgen(getter)]
+    pub fn release(&self) -> String {
+        self.0.release.name()
+    }
+
+    /// The name of the update file, such as `fwdc239b.bin`.
+    #[wasm_bindgen(getter, js_name = fileName)]
+    pub fn file_name(&self) -> String {
+        self.0.release.update.name.clone().unwrap_or_default()
+    }
+
+    /// The SHA-256 of the new file.
+    #[wasm_bindgen(getter)]
+    pub fn sha256(&self) -> String {
+        self.0.release.result.sha256.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn bytes(&self) -> Vec<u8> {
+        self.0.bytes.clone()
+    }
+}
+
+/// Returns the fast-boot update file of an official update file, or of the official ZIP that
+/// holds it, and undefined for any other file. It fails only when the patch of an official file
+/// fails.
+#[wasm_bindgen(js_name = patchFirmware)]
+pub fn patch_firmware(bytes: &[u8]) -> Result<Option<FastbootFirmware>, JsError> {
+    let Ok(update) = grkit_firmware::official_update(bytes) else {
+        return Ok(None);
+    };
+    let Ok(release) = grkit_firmware::release_of(&update) else {
+        return Ok(None);
+    };
+    grkit_firmware::patch_with(&update, release)
+        .map(|patched| Some(FastbootFirmware(patched)))
+        .map_err(js_error)
 }

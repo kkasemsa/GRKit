@@ -1,6 +1,6 @@
 //! Deterministic SD package assembly and bounded, strict package verification.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -10,14 +10,15 @@ use zip::{write::SimpleFileOptions, CompressionMethod, DateTime, ZipArchive, Zip
 
 use crate::{
     camera::{self, Camera},
-    card, effects,
+    card, effects, imports,
     language::Language,
     modules, runtime, Files,
 };
 
-pub const RUNTIME_PATHS: [&str; 5] = [
+pub const RUNTIME_PATHS: [&str; 6] = [
     "SCRIPT/STARTUP.TTL",
     card::LOADER_FILE,
+    card::RESIDENT_FILE,
     card::CORE_FILE,
     card::SCAN_FILE,
     card::INSTALL_FILE,
@@ -176,6 +177,7 @@ fn runtime_target(runtime: &Files, camera: &Camera) -> Result<&'static str> {
 /// release order, each named by its marker. A camera with one build has one
 /// core file.
 fn package_targets(runtime: &Files, camera: &Camera) -> Result<Vec<&'static str>> {
+    let fast = camera_fast_files(runtime, camera)?;
     let targets = camera.targets();
     if targets.len() == 1 {
         return Ok(vec![runtime_target(runtime, camera)?]);
@@ -204,7 +206,12 @@ fn package_targets(runtime: &Files, camera: &Camera) -> Result<Vec<&'static str>
         check_installer(binary)?;
     }
     ensure!(
-        *runtime == runtime::package_runtime_files(&binaries, runtime::icon_stride(targets[0])?),
+        *runtime
+            == runtime::package_runtime_files_with(
+                &binaries,
+                &fast,
+                runtime::icon_stride(targets[0])?
+            ),
         "Runtime scripts differ from the production templates"
     );
     Ok(targets)
@@ -236,14 +243,36 @@ fn package_runtime(runtimes: &[VerifiedRuntime], camera: &Camera) -> Result<File
         .iter()
         .map(|runtime| runtime.files()[card::CORE_FILE].as_slice())
         .collect();
-    let files = runtime::package_runtime_files(&binaries, runtime::icon_stride(targets[0])?);
-    // The builds of a camera share every file but the core file. The package
-    // has its own scripts that run the core files.
-    let own = [card::CORE_FILE, card::INSTALL_FILE, card::SCAN_FILE];
+    // The fast-boot files of the camera's releases. A build for two cameras
+    // has those of both.
+    let mut fast = Files::new();
+    for runtime in runtimes {
+        let own = runtime
+            .files()
+            .iter()
+            .filter(|(path, _)| {
+                runtime::FastRelease::of_path(path).is_some_and(|release| release.camera == camera)
+            })
+            .map(|(path, bytes)| (path.clone(), bytes.clone()));
+        fast.extend(own);
+    }
+    let files =
+        runtime::package_runtime_files_with(&binaries, &fast, runtime::icon_stride(targets[0])?);
+    // The builds of a camera share every file but the core file and the
+    // fast-boot files. The package has its own scripts that run them.
+    let own = [
+        card::CORE_FILE,
+        card::INSTALL_FILE,
+        card::SCAN_FILE,
+        card::LOADER_FILE,
+    ];
     for runtime in runtimes {
         for (name, blob) in runtime.files() {
             ensure!(
-                own.contains(&name.as_str()) || files.get(name) == Some(blob),
+                own.contains(&name.as_str())
+                    || runtime::FastRelease::of_path(name).is_some()
+                    || runtime::FastRelease::of_install_path(name).is_some()
+                    || files.get(name) == Some(blob),
                 "The {} runtime has another {name} than {}",
                 runtime.target(),
                 targets[0]
@@ -253,16 +282,58 @@ fn package_runtime(runtimes: &[VerifiedRuntime], camera: &Camera) -> Result<File
     Ok(files)
 }
 
-/// Checks the runtime files of a build for `target`.
+/// Whether `name` is the path of a runtime file: one of `RUNTIME_PATHS`, a
+/// fast-boot file, or the install file of one (`runtime::fastboot`).
+pub fn is_runtime_path(name: &str) -> bool {
+    RUNTIME_PATHS.contains(&name)
+        || runtime::FastRelease::of_path(name).is_some()
+        || runtime::FastRelease::of_install_path(name).is_some()
+}
+
+/// The fast-boot files of `files` (`runtime::fast_files`), each checked as
+/// one of `camera` built by its runtime build.
+fn camera_fast_files(files: &Files, camera: &Camera) -> Result<Files> {
+    let mut fast = Files::new();
+    for (release, bytes) in runtime::fast_files(files) {
+        ensure!(
+            release.camera == camera,
+            "{} is a fast-boot file of {}, not {}",
+            release.name(),
+            release.camera.name,
+            camera.name
+        );
+        runtime::check_fast_file(&release, bytes)?;
+        fast.insert(release.path(), bytes.clone());
+    }
+    Ok(fast)
+}
+
+/// Checks the runtime files of a build for `target`. A build has the
+/// fast-boot files of its releases that have one (`runtime::fastboot`).
 pub fn validate_runtime(files: &Files, target: &str) -> Result<()> {
+    let fast: Files = files
+        .iter()
+        .filter(|(path, _)| runtime::FastRelease::of_path(path).is_some())
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .collect();
+    for (release, bytes) in runtime::fast_files(&fast) {
+        ensure!(
+            release.target() == target,
+            "{} is a fast-boot file of the {} runtime, not {target}",
+            release.name(),
+            release.target()
+        );
+        runtime::check_fast_file(&release, bytes)?;
+    }
     ensure!(
-        files.len() == RUNTIME_PATHS.len() && RUNTIME_PATHS.iter().all(|p| files.contains_key(*p)),
+        RUNTIME_PATHS.iter().all(|p| files.contains_key(*p))
+            && files.keys().all(|path| is_runtime_path(path)),
         "Expected the complete production runtime file set"
     );
     let binary = &files[card::CORE_FILE];
     check_installer(binary)?;
     ensure!(
-        *files == runtime::runtime_files_for(binary, runtime::icon_stride(target)?),
+        *files == runtime::runtime_files_with(binary, &fast, runtime::icon_stride(target)?),
         "Runtime scripts differ from the production templates"
     );
     if let Some(name) = marked_target(binary) {
@@ -332,7 +403,7 @@ pub fn load_runtime(manifest: &[u8], files: &Files) -> Result<VerifiedRuntime> {
     {
         let name = item["path"].as_str().context("Expected a runtime path")?;
         ensure!(
-            RUNTIME_PATHS.contains(&name) && !runtime.contains_key(name),
+            is_runtime_path(name) && !runtime.contains_key(name),
             "Invalid runtime manifest entries"
         );
         let bytes = files
@@ -424,6 +495,9 @@ pub struct Contents {
     pub modules: Vec<String>,
     /// The language of the guide.
     pub language: Language,
+    /// The number of imports of the import library (`card::IMPORTS_FILE`), which the camera
+    /// does not install, or 0 without one.
+    pub imports: usize,
     /// The number of package entries, the runtime included.
     pub entries: usize,
 }
@@ -457,11 +531,23 @@ pub fn validate_contents(contents: &Files) -> Result<Contents> {
     };
     let activation = runtime::activation_files(camera);
     let cores = camera.targets().len();
+    // The fast-boot files and their install files, which package_targets
+    // checks.
+    let fast_paths: Vec<String> = contents
+        .keys()
+        .filter_map(|name| name.strip_prefix("SD_ROOT/"))
+        .filter(|path| {
+            runtime::FastRelease::of_path(path).is_some()
+                || runtime::FastRelease::of_install_path(path).is_some()
+        })
+        .map(str::to_owned)
+        .collect();
     let runtime_paths: Vec<String> = RUNTIME_PATHS
         .iter()
         .filter(|name| **name != card::CORE_FILE)
         .map(|name| (*name).to_owned())
         .chain((0..cores).map(|index| runtime::core_path_of(index, cores)))
+        .chain(fast_paths)
         .collect();
     let mut mandatory: BTreeSet<String> = runtime_paths
         .iter()
@@ -487,8 +573,11 @@ pub fn validate_contents(contents: &Files) -> Result<Contents> {
     let targets = package_targets(&runtime, camera)?;
     let mut ids = BTreeSet::new();
     let mut module_ids = BTreeSet::new();
+    let mut native_slots = BTreeMap::new();
+    let mut status_icons = 0;
     let mut listed = Vec::new();
     let mut language = None;
+    let mut library = 0;
     for (name, blob) in contents
         .iter()
         .filter(|(name, _)| !mandatory.contains(*name))
@@ -513,6 +602,27 @@ pub fn validate_contents(contents: &Files) -> Result<Contents> {
                 "The module file {file} is not named by its ID {}",
                 module.id
             );
+            for placement in module
+                .indicator_placements()
+                .with_context(|| format!("Read the viewfinder indicators of {}", module.id))?
+            {
+                match placement {
+                    crate::grm::IndicatorPlacement::NativeSlot(slot) => {
+                        if let Some(owner) = native_slots.insert(slot, module.id.clone()) {
+                            bail!("Viewfinder slot image_control is registered by both {owner} and {}", module.id);
+                        }
+                    }
+                    crate::grm::IndicatorPlacement::StatusRow => {
+                        status_icons += 1;
+                        ensure!(
+                            status_icons <= crate::abi::STATUS_ICONS_MAX,
+                            "The package exceeds the viewfinder status-row capacity of {} icons at module {}",
+                            crate::abi::STATUS_ICONS_MAX,
+                            module.id
+                        );
+                    }
+                }
+            }
             listed.push(file.to_owned());
             module_ids.insert(module.id);
         } else if let Some(guide) = Language::ALL
@@ -522,6 +632,10 @@ pub fn validate_contents(contents: &Files) -> Result<Contents> {
             ensure!(language.is_none(), "Package has more than one guide");
             check_guide(blob)?;
             language = Some(guide);
+        } else if *name == format!("SD_ROOT/{}", card::IMPORTS_FILE) {
+            library = imports::decode(blob)
+                .context("Read the import library")?
+                .len();
         } else {
             bail!("Package contains unexpected files: {name}");
         }
@@ -559,6 +673,7 @@ pub fn validate_contents(contents: &Files) -> Result<Contents> {
         effect_ids: ids.into_iter().collect(),
         modules: module_ids.into_iter().collect(),
         language: language.context("Package has no installation guide")?,
+        imports: library,
         entries: contents.len(),
     })
 }
@@ -611,6 +726,13 @@ pub struct Package {
     pub contents: Contents,
 }
 
+/// The files of a package that the camera does not install.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Extras<'a> {
+    /// The import library of the site (`card::IMPORTS_FILE`, `crate::imports`).
+    pub imports: Option<&'a [u8]>,
+}
+
 /// Builds the package ZIP for one camera from the runtime of each of its
 /// builds, in release order. `modules` holds the module files
 /// (`grkit_core::grm`).
@@ -620,6 +742,18 @@ pub fn assemble(
     modules: &[Vec<u8>],
     camera: &Camera,
     guide: &Guide,
+) -> Result<Package> {
+    assemble_with(runtimes, effects, modules, camera, guide, Extras::default())
+}
+
+/// `assemble`, with the files of `extras`.
+pub fn assemble_with(
+    runtimes: &[VerifiedRuntime],
+    effects: &EffectSet,
+    modules: &[Vec<u8>],
+    camera: &Camera,
+    guide: &Guide,
+    extras: Extras,
 ) -> Result<Package> {
     let mut contents: Files = package_runtime(runtimes, camera)?
         .iter()
@@ -655,6 +789,9 @@ pub fn assemble(
     );
     check_guide(guide.pdf)?;
     contents.insert(guide.language.guide_path(), guide.pdf.to_vec());
+    if let Some(bytes) = extras.imports {
+        contents.insert(format!("SD_ROOT/{}", card::IMPORTS_FILE), bytes.to_vec());
+    }
     contents.insert("LICENSES.md".into(), LICENSES.as_bytes().to_vec());
     contents.insert("SHA256SUMS".into(), checksum_list(&contents));
     validate_contents(&contents)?;
@@ -698,7 +835,30 @@ pub fn assemble_dump(mut contents: Files) -> Result<Vec<u8>> {
     write_zip(contents)
 }
 
-/// A deterministic ZIP of `contents`, with stored entries and a fixed time.
+/// The time of a ZIP entry with `blob`: a time in 2026 or 2027 that follows from
+/// the bytes, so the ZIP stays deterministic and a file whose bytes change
+/// gets another time. A copy of the ZIP keeps the times, and the camera takes a
+/// file with the size and the time that it recorded as unchanged
+/// (`runtime/install_library.h`, `runtime/fastboot/backend.c`). Months have 28
+/// days, so each date is valid, and seconds are even, as FAT keeps them.
+fn entry_time(blob: &[u8]) -> DateTime {
+    let digest = Sha256::digest(blob);
+    let hash = u64::from_le_bytes(digest[..8].try_into().expect("8 bytes"));
+    let day = (hash % (2 * 12 * 28)) as u16;
+    let seconds = ((hash / (2 * 12 * 28)) % (24 * 60 * 30)) as u32 * 2;
+    DateTime::from_date_and_time(
+        2026 + day / (12 * 28),
+        (day % (12 * 28) / 28 + 1) as u8,
+        (day % 28 + 1) as u8,
+        (seconds / 3600) as u8,
+        (seconds / 60 % 60) as u8,
+        (seconds % 60) as u8,
+    )
+    .expect("a valid time")
+}
+
+/// A deterministic ZIP of `contents`, with stored entries and the time of
+/// each entry from its bytes (`entry_time`).
 fn write_zip(contents: Files) -> Result<Vec<u8>> {
     let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
     for (name, blob) in contents {
@@ -709,9 +869,7 @@ fn write_zip(contents: Files) -> Result<Vec<u8>> {
         };
         let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
-            .last_modified_time(
-                DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0).expect("fixed valid timestamp"),
-            )
+            .last_modified_time(entry_time(&blob))
             .unix_permissions(mode);
         archive.start_file(name, options)?;
         archive.write_all(&blob)?;
@@ -738,8 +896,34 @@ pub fn card_files(bytes: &[u8]) -> Result<Files> {
         .collect())
 }
 
+/// The files that a GRKit ZIP of any release puts on the card, at their paths from the card
+/// root, so the site can read a ZIP as the card that holds it. The archive limits apply, but the
+/// package checks do not: a ZIP of an older release, whose runtime this version does not know,
+/// still gives its files. The caller checks each file that it reads.
+pub fn package_files(bytes: &[u8]) -> Result<Files> {
+    Ok(read_entries(bytes)?
+        .into_iter()
+        .filter_map(|(name, blob)| {
+            name.strip_prefix("SD_ROOT/")
+                .map(|path| (path.to_owned(), blob))
+        })
+        .collect())
+}
+
 /// Reads and checks a package ZIP, and returns what it holds and its entries.
 fn read_package(bytes: &[u8]) -> Result<(Contents, Files)> {
+    let contents = read_entries(bytes)?;
+    let result = validate_contents(&contents)?;
+    ensure!(
+        contents["SHA256SUMS"] == checksum_list(&contents),
+        "SHA256SUMS differs from package"
+    );
+    Ok((result, contents))
+}
+
+/// The entries of a ZIP within the package limits: safe, unique names, no links, and bounded
+/// sizes.
+fn read_entries(bytes: &[u8]) -> Result<Files> {
     let declared_entries = declared_entry_count(bytes)?;
     let mut archive = ZipArchive::new(Cursor::new(bytes)).context("Invalid ZIP archive")?;
     // zip indexes names in a map. Check the raw count so duplicate names cannot disappear.
@@ -783,12 +967,7 @@ fn read_package(bytes: &[u8]) -> Result<(Contents, Files)> {
         );
         contents.insert(name, blob);
     }
-    let result = validate_contents(&contents)?;
-    ensure!(
-        contents["SHA256SUMS"] == checksum_list(&contents),
-        "SHA256SUMS differs from package"
-    );
-    Ok((result, contents))
+    Ok(contents)
 }
 
 fn declared_entry_count(bytes: &[u8]) -> Result<usize> {
@@ -824,4 +1003,54 @@ fn declared_entry_count(bytes: &[u8]) -> Result<usize> {
     };
     ensure!(count <= MAX_ENTRIES as u64, "Archive exceeds entry limit");
     Ok(count as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A copied file keeps its ZIP time, and the camera takes a file with the
+    /// size and the time that it recorded as unchanged, so files with other
+    /// bytes get other times, and the same bytes the same time.
+    #[test]
+    fn zip_entries_with_other_bytes_get_other_times() {
+        let mut times = std::collections::BTreeSet::new();
+        for i in 0..400u32 {
+            let mut blob = vec![0u8; 8704];
+            blob[..4].copy_from_slice(&i.to_le_bytes());
+            let t = entry_time(&blob);
+            assert!((2026..=2027).contains(&t.year()));
+            assert!((1..=12).contains(&t.month()) && (1..=28).contains(&t.day()));
+            assert_eq!(t.second() % 2, 0);
+            times.insert((
+                t.year(),
+                t.month(),
+                t.day(),
+                t.hour(),
+                t.minute(),
+                t.second(),
+            ));
+        }
+        assert_eq!(times.len(), 400);
+        let blob = vec![7u8; 100];
+        let (a, b) = (entry_time(&blob), entry_time(&blob));
+        assert_eq!(
+            (
+                a.year(),
+                a.month(),
+                a.day(),
+                a.hour(),
+                a.minute(),
+                a.second()
+            ),
+            (
+                b.year(),
+                b.month(),
+                b.day(),
+                b.hour(),
+                b.minute(),
+                b.second()
+            )
+        );
+    }
 }

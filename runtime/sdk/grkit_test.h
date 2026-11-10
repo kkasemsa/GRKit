@@ -13,9 +13,12 @@
 /* Each pixel address of a surface maps to the pixel buffer of the harness. */
 #define GRKIT_PIXELS(address) grkit_test_pixels(address)
 /* The plane addresses of the harness: GRKIT_TEST_PLANE_BYTES bytes from
-   GRKIT_TEST_PLANES. */
+   GRKIT_TEST_PLANES. A build that runs a module on a full-size picture
+   defines a larger size. */
 #define GRKIT_TEST_PLANES 0x70000000U
+#ifndef GRKIT_TEST_PLANE_BYTES
 #define GRKIT_TEST_PLANE_BYTES (8U << 20)
+#endif
 #define GRKIT_BYTES(address) grkit_test_bytes(address)
 #include "grkit.h"
 
@@ -23,6 +26,11 @@ volatile u32 *grkit_test_pixels(u32 address);
 volatile u8 *grkit_test_bytes(u32 address);
 /* The time that local_time gives. */
 extern GrkitDateTime grkit_test_time;
+/* The white that picture_white gives, 255 each at start. */
+extern u8 grkit_test_white[3];
+/* The data that picture_shot gives: none known at start. Its `size` is
+   ignored; picture_shot fills the caller's size. */
+extern GrkitShot grkit_test_shot;
 /* The scratch of a PictureSet, GRKIT_PLANE_SCRATCH bytes. */
 extern u8 grkit_test_scratch[];
 /* The pixel at (x, y), and the value of each pixel after grkit_test_clear. */

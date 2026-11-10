@@ -22,7 +22,7 @@ typedef unsigned int u32;
    (crates/grkit-build/src/loader.rs). The target has no Image Control, so
    discover lists no effect. */
 #define GRKIT_NO_IMAGE_CONTROL 1
-#define MAX_COUNT 20U
+#define MAX_COUNT 40U
 #define ICONS_PER_CHUNK 40U
 #define ICON_STRIDE 0x1908U
 #define HOST_ICON_COUNT 4U
@@ -36,14 +36,16 @@ typedef unsigned int u32;
 #define STATE_PATH CARD "/GRKIT/STATE.TXT"
 #define MODULES_PATH CARD "/GRKIT/MODULES"
 #define LEGACY_EFFECTS_PATH CARD "/SCRIPT/PLUGINS/EFFECTS"
-#define CORE_STATE_IDS 861965461, 484706023, 790270076, 977751003
+#define CORE_STATE_IDS 861965461, 484706023, 790270076, 977751003, 826089556, 458876999, 697053196
 #define PARAMETER_KEY_BASE 990000000U
 #define STATE_TEXT_MAX 16384U
 #define POINT_VIEWFINDER_OVERLAY 0x4U
 #define POINT_MENU_PAGE 0x1U
 #define POINT_PICTURE_ENCODE 0x10U
-static const char *const core_setting_names[] = {"CORE.TONE", "CORE.ASPECT", "CORE.GRAIN", "CORE.GRAIN_SIZE"};
-static const u32 core_setting_points[] = {0x12, 0xc, 0x20, 0x40};
+static const char *const core_setting_names[] = {
+    "CORE.TONE", "CORE.ASPECT", "CORE.GRAIN", "CORE.GRAIN_SIZE", "CORE.ASPECT_MODE", "CORE.ADJ",
+    "CORE.ADJ_MODULE"};
+static const u32 core_setting_points[] = {0x12, 0xc, 0x20, 0x40, 0xc, 0x0, 0x0};
 /* The tail of the core, and its one export, overlay_label. */
 #define TAIL 0x54000000U
 #define TAIL_SYMBOL 0U
@@ -74,6 +76,18 @@ static void *host(u32 address)
     else if (at + 0x80000000U < near) at += (uintptr_t)1 << 32;
     return (void *)at;
 }
+/* AddressSanitizer can move the locals of the parts to a fake stack that it
+   maps far from the image (Linux), where host() cannot find them again. Keep
+   the locals on the stack of the thread. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define TEST_ADDRESS_SANITIZER 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(TEST_ADDRESS_SANITIZER)
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
+#endif
 
 /* The card: each file with its path and bytes. A folder exists while it
    holds a file, and it lists its files in the order that they were added,
@@ -237,6 +251,9 @@ static int sync_alias(u32 address, u32 n)
 }
 #define ICON_PIXELS 8
 static void icon_header(u32 icon, u32 pixels) { store(icon, pixels); }
+/* installer.c reads the model record of the camera. */
+static int test_monochrome;
+static int monochrome_camera(void) { return test_monochrome; }
 #include "install_modules.h"
 /* installer.c also reads STATE.TMP and the state of GRKit 1.2. */
 static void read_state(void)
@@ -253,15 +270,21 @@ struct spec {
     const char *id;
     u32 order, data_bytes, bss_bytes;
     /* A file with another magic, or with another major ABI. */
-    int bad_magic, new_abi;
-    struct { const char *key; u32 values, flags; } settings[SPEC_ITEMS];
+    int bad_magic, new_abi, legacy_abi;
+    struct { const char *key; u32 values, flags, default_value; } settings[SPEC_ITEMS];
     const char *uses[SPEC_ITEMS], *imports[SPEC_ITEMS];
-    u32 layer_count, filter_count;
+    u32 layer_count, filter_count, layer_conditions;
     struct { u32 order, flags, setting; } layers[SPEC_ITEMS];
     struct { u32 stage, setting; } filters[SPEC_ITEMS];
     /* A choice page of own setting 0 with these native settings rows: row 0
        is setting 0, the others an own setting n or GRM_USED | used n. */
-    u32 page_rows, rows[SPEC_ITEMS];
+    u32 page_rows, rows[SPEC_ITEMS], settings_page, group_page, bad_group;
+    u32 indicator_count, indicator_slot, condition_setting, condition_value;
+    u32 icon_kind, icon_setting, icon_first, indicator_tiles, page_icon;
+    /* The flags of a 44-byte descriptor (ABI 2.4), or 0 for a 40-byte one. */
+    u32 module_flags;
+    /* The Fn value and setting of a 56-byte page (ABI 2.5), or 0. */
+    u32 fn_value, fn_setting;
 };
 static u32 code_words[GRM_MAX_SEGMENT / 4], code_count, relocations[256], relocation_count;
 static u32 emit(u32 value)
@@ -302,8 +325,8 @@ static u32 add_module(const char *folder, const char *file, const struct spec *s
     static u8 bytes[MODULE_FILE_MAX];
     u32 settings = 0, uses = items(s->uses), imports = items(s->imports);
     u32 paint[SPEC_ITEMS], apply[SPEC_ITEMS], import_at[SPEC_ITEMS], keys[SPEC_ITEMS], use_names[SPEC_ITEMS];
-    u32 layer_at[SPEC_ITEMS], filter_at[SPEC_ITEMS];
-    u32 abi = (GRM_ABI_MAJOR + (s->new_abi ? 1U : 0U)) << 16 | GRM_ABI_MINOR;
+    u32 layer_at[SPEC_ITEMS], filter_at[SPEC_ITEMS], indicator_at[SPEC_ITEMS];
+    u32 abi = (GRM_ABI_MAJOR + (s->new_abi ? 1U : 0U)) << 16 | (s->legacy_abi ? 1U : GRM_ABI_MINOR);
     while (settings < SPEC_ITEMS && s->settings[settings].key) ++settings;
     memset(code_words, 0, sizeof code_words);
     code_count = relocation_count = 0;
@@ -314,22 +337,39 @@ static u32 add_module(const char *folder, const char *file, const struct spec *s
     for (u32 k = 0; k < uses; ++k) use_names[k] = emit_text(s->uses[k]);
     u32 setting_list = code_count;
     for (u32 k = 0; k < settings; ++k) {
-        emit(GRM_SETTING); emit_pointer(keys[k], 0);
-        emit(s->settings[k].values); emit(s->settings[k].flags);
+        emit(GRM_SETTING_DEFAULT); emit_pointer(keys[k], 0);
+        emit(s->settings[k].values); emit(s->settings[k].flags); emit(s->settings[k].default_value);
     }
     u32 use_list = code_count;
     for (u32 k = 0; k < uses; ++k) emit_pointer(use_names[k], 0);
+    u32 layer_conditions = code_count;
+    if (s->layer_conditions) { emit(s->condition_setting); emit(GRM_CONDITION_EQUALS); emit(s->condition_value); }
     for (u32 k = 0; k < s->layer_count; ++k) {
-        layer_at[k] = emit(GRM_LAYER); emit(s->layers[k].flags); emit_pointer(paint[k], 1);
+        layer_at[k] = emit(s->layer_conditions ? GRM_LAYER_CONDITIONAL : GRM_LAYER);
+        emit(s->layers[k].flags); emit_pointer(paint[k], 1);
         emit(s->layers[k].setting); emit(s->layers[k].order);
+        if (s->layer_conditions) { emit(1); emit_pointer(layer_conditions, 0); }
     }
     for (u32 k = 0; k < s->filter_count; ++k) {
         filter_at[k] = emit(GRM_FILTER); emit(s->filters[k].stage); emit(s->filters[k].setting);
         emit_pointer(apply[k], 1);
     }
+    u32 icon_at = 0;
+    if (s->indicator_count || s->page_icon) {
+        icon_at = emit(GRM_ICON); emit(s->icon_kind ? s->icon_kind : GRM_ICON_TILE);
+        emit(s->icon_setting); emit(s->icon_first);
+        u32 conditions = emit(s->condition_setting); emit(GRM_CONDITION_EQUALS); emit(s->condition_value);
+        for (u32 k = 0; k < s->indicator_count; ++k) {
+            indicator_at[k] = emit(GRM_INDICATOR);
+            emit(s->indicator_slot ? GRM_INDICATOR_NATIVE_SLOT : GRM_INDICATOR_STATUS_ROW);
+            emit(s->indicator_slot); emit(1); emit_pointer(conditions, 0); emit_pointer(icon_at, 0);
+        }
+    }
     /* The page: one text for each language and value, 32 at most, and a
        blank tile for each value of setting 0. */
-    u32 page_at = 0, tiles_at = 0, tile_count = s->page_rows ? s->settings[0].values : 0;
+    u32 page_at = 0, child_at[2] = {0, 0}, tiles_at = 0;
+    u32 tile_count = s->group_page ? 3 : s->page_rows ? (s->settings_page ? 1 : s->settings[0].values) : 0;
+    if (s->indicator_tiles) tile_count = s->indicator_tiles;
     if (s->page_rows) {
         static const u16 hi[] = {'H', 'i', 0};
         u32 text = emit(0), texts, row_list;
@@ -341,22 +381,54 @@ static u32 add_module(const char *folder, const char *file, const struct spec *s
         for (u32 r = 0; r < s->page_rows; ++r) {
             emit(GRM_ROW); emit(r ? s->rows[r] : 0); emit_pointer(texts, 0); emit_pointer(texts, 0);
         }
-        page_at = emit(GRM_PAGE); emit(GRM_PAGE_CHOICE); emit(0); emit(0);
+        page_at = emit(GRM_PAGE); emit(s->settings_page ? GRM_PAGE_SETTINGS : GRM_PAGE_CHOICE); emit(0); emit(0);
         emit_pointer(texts, 0); emit_pointer(texts, 0); emit_pointer(texts, 0);
-        emit(tile_count); emit(s->page_rows); emit_pointer(row_list, 0);
-        tiles_at = code_count;
-        for (u32 k = 0; k < tile_count * GRM_TILE_BYTES / 4; ++k) emit(0);
+        emit(s->settings[0].values); emit(s->page_rows); emit_pointer(row_list, 0);
+        if (s->page_icon || s->fn_value) {
+            code_words[page_at] = GRM_PAGE_ICON;
+            emit(0);
+            if (s->page_icon) emit_pointer(icon_at, 0);
+            else emit(0);
+        }
+        if (s->fn_value) {
+            code_words[page_at] = GRM_PAGE_FN;
+            emit(s->fn_value); emit(s->fn_setting);
+        }
+        if (s->group_page) {
+            child_at[0] = page_at;
+            code_words[page_at + GRM_PAGE_KIND_AT / 4] = GRM_PAGE_SETTINGS;
+            code_words[page_at + GRM_PAGE_FLAGS_AT / 4] = GRM_PAGE_MENU_ONLY;
+            row_list = code_count;
+            for (u32 r = 0; r < 2; ++r) {
+                emit(GRM_ROW); emit(r + 2); emit_pointer(texts, 0); emit_pointer(texts, 0);
+            }
+            child_at[1] = emit(GRM_PAGE); emit(GRM_PAGE_SETTINGS); emit(2); emit(GRM_PAGE_MENU_ONLY);
+            emit_pointer(texts, 0); emit(0); emit(0); emit(s->settings[2].values); emit(2); emit_pointer(row_list, 0);
+            u32 children = code_count;
+            emit_pointer(child_at[0], 0); emit_pointer(child_at[1], 0);
+            page_at = emit(GRM_GROUP_PAGE); emit(GRM_PAGE_GROUP); emit(GRM_NO_SETTING); emit(0);
+            emit_pointer(texts, 0); emit(0); emit(0); emit(2); emit(0); emit(0); emit_pointer(children, 0);
+            if (s->bad_group == 1) code_words[child_at[1] + GRM_PAGE_FLAGS_AT / 4] = 0;
+            if (s->bad_group == 2) code_words[children + 1] = page_at * 4;
+            if (s->bad_group == 3) code_words[page_at] = GRM_PAGE;
+            if (s->bad_group == 4) code_words[page_at + GRM_PAGE_ROWS_AT / 4] = GRM_PAGE_CHILDREN + 1;
+        }
     }
+    tiles_at = code_count;
+    for (u32 k = 0; k < tile_count * GRM_TILE_BYTES / 4; ++k) emit(0);
     u32 registrations = code_count;
     for (u32 k = 0; k < s->layer_count; ++k) { emit(GRM_POINT_OVERLAY_LAYER); emit_pointer(layer_at[k], 0); }
     for (u32 k = 0; k < s->filter_count; ++k) { emit(GRM_POINT_PICTURE_PLANE); emit_pointer(filter_at[k], 0); }
     if (s->page_rows) { emit(GRM_POINT_MENU_PAGE); emit_pointer(page_at, 0); }
-    u32 descriptor = emit(GRM_DESCRIPTOR);
+    if (s->group_page) for (u32 k = 0; k < 2; ++k) { emit(GRM_POINT_MENU_PAGE); emit_pointer(child_at[k], 0); }
+    for (u32 k = 0; k < s->indicator_count; ++k) { emit(GRM_POINT_VIEWFINDER_INDICATOR); emit_pointer(indicator_at[k], 0); }
+    u32 descriptor = emit(s->module_flags ? GRM_DESCRIPTOR_FLAGS : GRM_DESCRIPTOR);
     emit(abi);
-    emit_list(registrations, s->layer_count + s->filter_count + (s->page_rows ? 1 : 0));
+    emit_list(registrations, s->layer_count + s->filter_count + s->indicator_count + (s->page_rows ? 1 : 0) + (s->group_page ? 2 : 0));
     emit_list(setting_list, settings);
     emit_list(use_list, uses);
     emit_list(tiles_at, tile_count);
+    if (s->module_flags) emit(s->module_flags);
 
     u32 names = 0;
     for (u32 k = 0; k < imports; ++k) names += (u32)strlen(s->imports[k]) + 1;
@@ -417,12 +489,15 @@ static void scan(void)
     plan_array();
 }
 /* INSTALL after SCAN. */
-static int install(void)
+static int install_with_core(u32 tail, u32 core_bytes, u32 executable_end)
 {
     static const u32 icon_bases[1] = {ICONS_AT};
+    u32 code;
     scan();
-    return install_modules(CODE_AT, ARRAY_AT, PIXELS, icon_bases);
+    int status = plan_code(tail, core_bytes, executable_end, &code);
+    return status ? status : install_modules(code, ARRAY_AT, PIXELS, icon_bases);
 }
+static int install(void) { return install_with_core(CODE_AT, 0, ARRAY_AT); }
 static void expect_modules(const char *const *files, const u32 *sources, u32 n)
 {
     assert(module_count == n);
@@ -549,13 +624,55 @@ static void a_bad_module_keeps_the_others(void)
     expect_listed(1, GRM_BAD_ABI, "NEWABI (51)");
     expect_listed(5, GRM_BAD_FILE, "BADMAGIC (50)");
 }
+/* A larger core moves both module code and its linked entry points. The
+   last module may end exactly at the executable boundary. */
+static void module_code_follows_the_actual_core(void)
+{
+    for (u32 core = 0x10000U; core <= 0x18000U; core += 0x8000U) {
+        reset();
+        u32 first = add_module(PACKAGE_MODULES_PATH, "FIRST.GRM",
+            &(struct spec){.id = "FIRST", .order = 1, .layer_count = 1, .layers = {{0, 0, GRM_NO_SETTING}}});
+        u32 second = add_module(PACKAGE_MODULES_PATH, "SECOND.GRM",
+            &(struct spec){.id = "SECOND", .order = 2, .layer_count = 1, .layers = {{0, 0, GRM_NO_SETTING}}});
+        u32 start = CODE_AT + core;
+        assert(install_with_core(CODE_AT, core, start + first + second) == 0);
+        assert(module_code_from[0] == start && module_code_to[0] == start + first);
+        assert(module_code_from[1] == start + first && module_code_to[1] == start + first + second);
+        assert(module_layers[0] == start + 1 && module_layers[4] == start + first + 1);
+    }
+}
+/* A core or module overflow must fail before code, data, icons, or settings
+   are written. Include inputs whose sums would wrap a 32-bit address. */
+static void code_overflow_leaves_camera_memory_unchanged(void)
+{
+    reset();
+    u32 bytes = add_module(PACKAGE_MODULES_PATH, "ONLY.GRM", &(struct spec){.id = "ONLY"});
+    const u32 attempts[][3] = {
+        {CODE_AT, 0x10000U, CODE_AT + 0x10000U + bytes - 1},
+        {CODE_AT, 0x10000U, CODE_AT + 0xffffU},
+        {0x55000004U, 0, 0x55000000U},
+        {0x54ff0000U, 0xffffffffU, 0x55000000U},
+        {0xfffffff0U, 0x20U, 0xffffffffU},
+    };
+    memset(memory, 0xa5, sizeof memory);
+    for (u32 i = 0; i < sizeof attempts / sizeof attempts[0]; ++i) {
+        assert(install_with_core(attempts[i][0], attempts[i][1], attempts[i][2]) == GRM_NO_ROOM);
+        for (u32 j = 0; j < sizeof memory; ++j) assert(memory[j] == 0xa5);
+    }
+    /* The RX end itself is a valid start only when no module code remains. */
+    reset();
+    scan();
+    u32 start = 0;
+    assert(plan_code(0x54ff0000U, 0x10000U, 0x55000000U, &start) == 0);
+    assert(start == 0x55000000U);
+}
 /* SCAN reserves the module array for the most effects. BIG fills half of
    it, and FILL the rest, so that one word more of FILL leaves no room for
    the services block. */
 static void the_budget_counts_the_services_block(void)
 {
     const u32 big = 2 * GRM_MAX_SEGMENT / 4;
-    const u32 others = SETTINGS_WORDS(MANAGE_PER_MODULE * 2 + EFFECTS_LISTED) + 2 * CONTEXT_WORDS(0) +
+    const u32 others = SETTINGS_WORDS(CHOICE_ENTRIES(2, EFFECTS_LISTED)) + 2 * CONTEXT_WORDS(0) +
                        MANAGE_WORDS(2) + EFFECT_LIST_WORDS(EFFECTS_LISTED) + SERVICES_WORDS + big;
     const u32 room = GRKIT_MODULE_ARRAY_WORDS - others;
     assert(room * 4 > GRM_MAX_SEGMENT && room * 4 < 2 * GRM_MAX_SEGMENT);
@@ -600,10 +717,10 @@ static void install_writes_the_settings_and_the_contexts(void)
     for (u32 k = 0; k < GRKIT_CORE_SETTING_COUNT; ++k) assert(core_ids[k] == id_of(core_setting_names[k]));
     save_state(pairs, sizeof pairs / sizeof pairs[0] / 2);
     assert(install() == 0);
-    /* The settings of the modules, the choices of the GRKit section, then
-       the saved values that no setting takes: CORE.GRAIN, which no module
-       uses, and an unknown key, but not a value 0. */
-    assert(word(ARRAY_AT) == 12 && word(ARRAY_AT + 4) == 0);
+    /* The settings of the modules, the choices of the GRKit section, the
+       switch, then the saved values that no setting takes: CORE.GRAIN,
+       which no module uses, and unknown keys, including a value 0. */
+    assert(word(ARRAY_AT) == 14 && word(ARRAY_AT + 4) == 0);
     expect_setting(0, id_of("GUIDES.STYLE"), 0, 6);
     expect_setting(1, id_of("GUIDES.COLOR"), 0, 3);
     expect_setting(2, 0, 0, 2);
@@ -614,11 +731,13 @@ static void install_writes_the_settings_and_the_contexts(void)
     expect_setting(7, id_of("CORE.OFF.DATE"), 1, 2);
     expect_setting(8, id_of("CORE.POS.DATE"), 0, MANAGE_MODULES + 1);
     expect_setting(9, id_of("CORE.ROWS.DATE"), 5, 1U << MANAGE_OPTION_VALUES);
-    expect_setting(10, 12345, 7, 8);
-    expect_setting(11, id_of("CORE.GRAIN"), 1, 2);
+    expect_setting(10, id_of("CORE.OFF"), 0, 2);
+    expect_setting(11, 12345, 7, 8);
+    expect_setting(12, 23456, 0, 1);
+    expect_setting(13, id_of("CORE.GRAIN"), 1, 2);
     /* The contexts: the first setting, the count, reserved, then the handle
        of each used setting. */
-    u32 context = ARRAY_AT + 4 * SETTINGS_WORDS(12);
+    u32 context = ARRAY_AT + 4 * SETTINGS_WORDS(14);
     assert(word(context) == 0 && word(context + 4) == 3 && word(context + 8) == 0);
     assert(word(context + 12) == GRKIT_CORE_ASPECT && word(context + 16) == GRM_NO_SETTING);
     u32 date_context = context + 4 * CONTEXT_WORDS(2);
@@ -632,6 +751,230 @@ static void install_writes_the_settings_and_the_contexts(void)
     assert(capabilities_running == capabilities_used);
     assert((needed_points & core_setting_points[1]) == core_setting_points[1]);
     assert(word(module_list + MANAGE_SETTINGS) == 4);
+    assert(word(module_list + MANAGE_SWITCH) == 10 + 1);
+}
+/* Defaults initialize both saved and transient settings. Explicit saved zero
+   survives a restart and a period without the module installed. */
+static void setting_defaults_and_saved_zero(void)
+{
+    const struct spec module = {
+        .id = "DEFAULT", .settings = {{"LEVEL", 3, GRM_SETTING_SAVED, 1}, {"TEMP", 3, 0, 2}},
+    };
+    const u32 pairs[] = {id_of("DEFAULT.LEVEL"), 0};
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "DEFAULT.GRM", &module);
+    assert(install() == 0);
+    expect_setting(0, pairs[0], 1, 3);
+    expect_setting(1, 0, 2, 3);
+    save_state(pairs, 1);
+    assert(install() == 0);
+    u32 entry = ARRAY_AT + 4 * SETTINGS_ENTRY(0);
+    assert(state_setting_value(&saved_state, word(entry), word(entry + 4), word(entry + 8)) == 0);
+
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "GUIDES.GRM", &guides);
+    save_state(pairs, 1);
+    assert(install() == 0);
+    assert(kept_count == 1 && kept_ids[0] == pairs[0] && kept_values[0] == 0);
+}
+/* SCAN and INSTALL keep the framing mode available for the state restore,
+   including when Framing loads stopped. This harness does not run the
+   apply_state function that writes the restored values into the header. */
+static void framing_mode_state_survives_install_planning(void)
+{
+    const struct spec framing = {.id = "FRAMING", .uses = {"CORE.ASPECT", "CORE.ASPECT_MODE"}};
+    const u32 capabilities = GRKIT_CORE_ASPECT_BIT | GRKIT_CORE_ASPECT_MODE_BIT;
+    for (u32 scenario = 0; scenario < 3; ++scenario) {
+        reset();
+        add_module(PACKAGE_MODULES_PATH, "FRAMING.GRM", &framing);
+        const u32 pairs[] = {id_of("CORE.ASPECT"), 1, id_of("CORE.ASPECT_MODE"), 1,
+                             id_of("CORE.OFF.FRAMING"), 1};
+        /* An existing state has the selected XPan ratio but no mode key.
+           A newer state saves guide-only, optionally with Framing off. */
+        save_state(pairs, scenario + 1);
+        assert(install() == 0 && module_status[0] == 0);
+        assert(capabilities_used == capabilities);
+        assert(capabilities_running == (scenario == 2 ? 0 : capabilities));
+        u32 context = ARRAY_AT + 4 * SETTINGS_WORDS(word(ARRAY_AT));
+        assert(word(context + 12) == GRKIT_CORE_ASPECT);
+        assert(word(context + 16) == GRKIT_CORE_ASPECT_MODE);
+        u32 value = 99;
+        assert(state_value(&saved_state, pairs[0], &value) && value == 1);
+        assert(state_value(&saved_state, pairs[2], &value) == (scenario != 0));
+        if (scenario) assert(value == 1);
+        assert(state_setting_value(&saved_state, pairs[2], 0, GRKIT_CORE_ASPECT_MODE_VALUES) == (scenario != 0));
+        /* A stopped module still owns its core state. Its saved mode is
+           not reclassified as an unknown setting or removed. */
+        assert(state_taken(pairs[2]) && kept_count == 0);
+        assert(module_off[0] == (scenario == 2));
+        expect_setting(word(module_list + MANAGE_SETTINGS), pairs[4], scenario == 2, 2);
+    }
+}
+/* A settings-only entry links its independent rows with only a module tile. */
+static void install_settings_page(void)
+{
+    const struct spec module = {
+        .id = "SETTINGS", .settings = {{"FIRST", 4, GRM_SETTING_SAVED}, {"SECOND", 4, GRM_SETTING_SAVED}},
+        .page_rows = 2, .rows = {0, 1}, .settings_page = 1,
+    };
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "SETTINGS.GRM", &module);
+    assert(install() == 0 && module_page_count == 1 && module_tiles == 1);
+    u32 page = module_pages[0], rows = word(page + GRM_PAGE_SETTINGS_AT);
+    assert(word(page + GRM_PAGE_KIND_AT) == GRM_PAGE_SETTINGS && word(page + GRM_PAGE_SETTING_ROWS_AT) == 2);
+    assert(word(rows + GRM_ROW_SETTING_AT) == 0 && word(rows + GRM_ROW + GRM_ROW_SETTING_AT) == 1);
+}
+/* On a monochrome camera a row of a color-only setting is left out, and the
+   rows after it move up. A color camera keeps every row. */
+static void install_color_only_rows(void)
+{
+    const struct spec module = {
+        .id = "COLOR", .settings = {{"FIRST", 4, GRM_SETTING_SAVED}, {"TINT", 4, GRM_SETTING_SAVED | GRM_SETTING_COLOR_ONLY},
+                                    {"LAST", 2, GRM_SETTING_SAVED}},
+        .page_rows = 3, .rows = {0, 1, 2}, .settings_page = 1,
+    };
+    for (int monochrome = 0; monochrome < 2; ++monochrome) {
+        reset();
+        test_monochrome = monochrome;
+        add_module(PACKAGE_MODULES_PATH, "COLOR.GRM", &module);
+        assert(install() == 0 && module_status[0] == 0 && module_page_count == 1);
+        u32 page = module_pages[0], rows = word(page + GRM_PAGE_SETTINGS_AT);
+        assert(word(page + GRM_PAGE_SETTING_ROWS_AT) == (monochrome ? 2U : 3U));
+        assert(word(rows + GRM_ROW_SETTING_AT) == 0);
+        assert(word(rows + GRM_ROW + GRM_ROW_SETTING_AT) == (monochrome ? 2U : 1U));
+    }
+    test_monochrome = 0;
+}
+/* On a monochrome camera a color-only module does not load (GRM_COLOR_ONLY),
+   and the other modules load. MENU does not list it (menu_contract.c). A
+   color camera loads it. */
+static void a_color_only_module_needs_a_color_camera(void)
+{
+    for (int monochrome = 0; monochrome < 2; ++monochrome) {
+        reset();
+        test_monochrome = monochrome;
+        add_module(PACKAGE_MODULES_PATH, "FILM.GRM", &(struct spec){.id = "FILM", .order = 1, .module_flags = GRM_MODULE_COLOR_ONLY});
+        add_module(PACKAGE_MODULES_PATH, "OTHER.GRM", &(struct spec){.id = "OTHER", .order = 2});
+        assert(install() == 0 && module_count == 2);
+        assert(module_status[0] == (monochrome ? (u32)GRM_COLOR_ONLY : 0) && module_status[1] == 0);
+        expect_listed(0, monochrome ? MANAGE_COLOR_ONLY : MANAGE_LOADED, monochrome ? "FILM (56)" : "FILM");
+    }
+    /* A flag that this GRKit does not know. */
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "NEW.GRM", &(struct spec){.id = "NEW", .module_flags = 2});
+    assert(install() == 0 && module_status[0] == GRM_BAD_DESCRIPTOR);
+    test_monochrome = 0;
+}
+/* A group and both children install atomically; children keep independent
+   handles, and descriptors remain inside the owning module's code. */
+static void install_group_page(void)
+{
+    struct spec group = {
+        .id = "GROUP", .settings = {{"FIRST_ON", 2, GRM_SETTING_SAVED}, {"FIRST_POWER", 3, GRM_SETTING_SAVED, 1},
+                                 {"SECOND_ON", 2, GRM_SETTING_SAVED}, {"SECOND_POWER", 3, GRM_SETTING_SAVED, 1}},
+        .page_rows = 2, .rows = {0, 1}, .group_page = 1,
+    };
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "GROUP.GRM", &group);
+    assert(install() == 0 && module_status[0] == 0 && module_page_count == 3 && module_tiles == 3);
+    u32 page = module_pages[0], children = word(page + GRM_PAGE_CHILDREN_AT);
+    assert(word(page + GRM_PAGE_KIND_AT) == GRM_PAGE_GROUP && module_pages[1] == GRM_NO_SETTING);
+    for (u32 c = 0; c < 2; ++c) {
+        u32 child = module_pages[(c + 1) * 3], rows = word(child + GRM_PAGE_SETTINGS_AT);
+        assert(word(children + c * 4) == child && module_pages[(c + 1) * 3 + 1] == c * 2);
+        assert(word(rows + GRM_ROW_SETTING_AT) == c * 2 && word(rows + GRM_ROW + GRM_ROW_SETTING_AT) == c * 2 + 1);
+        assert(word(child + GRM_PAGE_FLAGS_AT) == GRM_PAGE_MENU_ONLY);
+    }
+    for (u32 bad = 1; bad <= 4; ++bad) {
+        reset(); group.bad_group = bad;
+        add_module(PACKAGE_MODULES_PATH, "GROUP.GRM", &group);
+        assert(install() == 0 && module_status[0] == GRM_BAD_DESCRIPTOR && !module_page_count);
+    }
+    group.bad_group = 0;
+    /* A child lists the values of its first setting: Off, Weak, Medium,
+       and Strong install. A setting with one value has no Off to list. */
+    reset();
+    group.settings[0].values = 4;
+    add_module(PACKAGE_MODULES_PATH, "GROUP.GRM", &group);
+    assert(install() == 0 && module_status[0] == 0 && module_page_count == 3);
+    reset();
+    group.settings[0].values = 1;
+    add_module(PACKAGE_MODULES_PATH, "GROUP.GRM", &group);
+    assert(install() == 0 && module_status[0] == GRM_BAD_DESCRIPTOR && !module_page_count);
+    group.settings[0].values = 2;
+    reset();
+    for (u32 i = 0; i < 4; ++i) {
+        char id[] = "GROUP0", file[] = "GROUP0.GRM";
+        id[5] += (char)i; file[5] += (char)i;
+        group.id = id; group.order = i;
+        add_module(PACKAGE_MODULES_PATH, file, &group);
+    }
+    assert(install() == 0 && module_page_count == 9 && module_status[3] == GRM_NO_ROOM);
+}
+/* The GRKit switch Off stops each module that loads, as its own Off does,
+   and keeps the Enable of each. */
+static void the_switch_stops_each_module(void)
+{
+    reset();
+    u32 first = add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &(struct spec){.id = "FIRST", .order = 1, .uses = {"CORE.ASPECT"}});
+    u32 second = add_module(PACKAGE_MODULES_PATH, "SECOND.GRM", &(struct spec){.id = "SECOND", .order = 2, .uses = {"CORE.GRAIN"}});
+    const u32 pairs[] = {id_of("CORE.OFF"), 1, id_of("CORE.OFF.SECOND"), 1};
+    save_state(pairs, 2);
+    assert(install() == 0);
+    assert(all_off && module_status[0] == 0 && module_status[1] == 0);
+    /* The switch and the Enable of each module keep their values. */
+    u32 handle = word(module_list + MANAGE_SWITCH) - 1;
+    expect_setting(handle, id_of("CORE.OFF"), 1, 2);
+    expect_setting(word(module_list + MANAGE_SETTINGS), id_of("CORE.OFF.FIRST"), 0, 2);
+    expect_setting(word(module_list + MANAGE_SETTINGS) + MANAGE_PER_MODULE, id_of("CORE.OFF.SECOND"), 1, 2);
+    /* Each module loads stopped, and no capability runs. */
+    assert(word(services_block + SERVICES_SUSPENDED) == 2);
+    assert(word(services_block + SERVICES_SUSPENDED + 4) == CODE_AT);
+    assert(word(services_block + SERVICES_SUSPENDED + 16) == CODE_AT + first + second);
+    assert(capabilities_running == 0);
+    assert(capabilities_used == (1U << (GRKIT_CORE_ASPECT - GRKIT_CORE_SETTING_BASE) |
+                                 1U << (GRKIT_CORE_GRAIN - GRKIT_CORE_SETTING_BASE)));
+    /* A switch that is On runs the modules whose Enable is On. */
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &(struct spec){.id = "FIRST", .order = 1, .uses = {"CORE.ASPECT"}});
+    add_module(PACKAGE_MODULES_PATH, "SECOND.GRM", &(struct spec){.id = "SECOND", .order = 2, .uses = {"CORE.GRAIN"}});
+    const u32 on[] = {id_of("CORE.OFF"), 0, id_of("CORE.OFF.SECOND"), 1};
+    save_state(on, 2);
+    assert(install() == 0);
+    assert(!all_off && word(services_block + SERVICES_SUSPENDED) == 1);
+    assert(capabilities_running == 1U << (GRKIT_CORE_ASPECT - GRKIT_CORE_SETTING_BASE));
+}
+/* Conditions in two descriptors can share one array. Relocation must read
+   original local handles each time, not relocate an already global handle. */
+static void layer_conditions_resolve_shared_and_optional_settings(void)
+{
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &(struct spec){
+        .id="FIRST", .order=1, .settings={{"ON",2,0}}});
+    add_module(PACKAGE_MODULES_PATH, "GUIDES.GRM", &(struct spec){
+        .id="GUIDES", .order=2, .settings={{"STYLE",6,0},{"DISP",2,0}},
+        .layer_count=2, .layer_conditions=1, .condition_setting=1, .condition_value=1,
+        .layers={{20,GRM_LAYER_FOLLOW_DISP,0},{20,0,0}}});
+    assert(install()==0 && module_layer_count==2 && module_status[1]==0);
+    u32 first=module_layers[3], second=module_layers[7];
+    assert(first && second && first!=second);
+    u32 conditions=word(first+GRM_LAYER_CONDITIONS_AT);
+    assert(conditions==word(second+GRM_LAYER_CONDITIONS_AT));
+    assert(word(conditions)==2 && word(conditions+GRM_CONDITION_VALUE_AT)==1);
+    assert(module_layers[1]==1 && module_layers[5]==1);
+
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "OPTIONAL.GRM", &(struct spec){
+        .id="OPTIONAL", .uses={"?MISSING.ON"}, .layer_count=1, .layer_conditions=1,
+        .condition_setting=GRM_USED, .layers={{20,0,GRM_NO_SETTING}}});
+    assert(install()==0 && module_status[0]==0 && module_layer_count==1);
+    assert(word(word(module_layers[3]+GRM_LAYER_CONDITIONS_AT))==GRM_NO_SETTING);
+
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "INVALID.GRM", &(struct spec){
+        .id="INVALID", .uses={"CORE.GRAIN"}, .layer_count=1, .layer_conditions=1,
+        .condition_setting=GRM_USED, .condition_value=5, .layers={{20,0,GRM_NO_SETTING}}});
+    assert(install()==0 && module_status[0]==GRM_BAD_DESCRIPTOR && !module_layer_count);
 }
 static void layers_follow_their_order_and_filters_their_stage(void)
 {
@@ -653,8 +996,8 @@ static void layers_follow_their_order_and_filters_their_stage(void)
     const u32 paints[] = {CODE_AT + 4 + 1, second + 1, second + 4 + 1, CODE_AT + 1};
     assert(module_layer_count == 4);
     for (u32 k = 0; k < 4; ++k)
-        assert(module_layers[k * 3] == paints[k] && module_layers[k * 3 + 1] == settings[k] &&
-               module_layers[k * 3 + 2] == keys[k]);
+        assert(module_layers[k * 4] == paints[k] && module_layers[k * 4 + 1] == settings[k] &&
+               module_layers[k * 4 + 2] == keys[k] && module_layers[k * 4 + 3] == 0);
     assert(module_filter_count == 2);
     assert(module_filters[0] == second + 8 + 1 && module_filters[1] == (GRM_STAGE_FRAME << 16 | 1));
     assert(module_filters[2] == CODE_AT + 8 + 1 && module_filters[3] == (GRM_STAGE_MARK << 16 | 0));
@@ -740,6 +1083,32 @@ static void settings_rows_of_used_settings(void)
     assert(install() == 0 && module_status[0] == GRM_BAD_DESCRIPTOR);
 }
 
+/* The Fn setting of a page row (ABI 2.5) gets its handle: an own setting or
+   a used one. Without the setting of an optional use, the page has no Fn
+   value. */
+static void the_fn_setting_of_a_page_gets_its_handle(void)
+{
+    static const u32 named[] = {1, GRM_USED | 1, GRM_USED | 0}, handles[] = {1, GRKIT_CORE_GRAIN, 0};
+    for (u32 k = 0; k < 3; ++k) {
+        reset();
+        const struct spec grain = {.id = "GRAIN", .order = 1,
+                                   .settings = {{"LEVEL", 2, GRM_SETTING_SAVED}, {"TONE", 3, GRM_SETTING_SAVED}},
+                                   .uses = {"?OTHER.SIZE", "CORE.GRAIN"},
+                                   .page_rows = 1, .rows = {0}, .fn_value = 1, .fn_setting = named[k]};
+        add_module(PACKAGE_MODULES_PATH, "GRAIN.GRM", &grain);
+        assert(install() == 0 && module_status[0] == 0 && module_page_count == 1);
+        u32 page = module_pages[0];
+        assert(word(page) == GRM_PAGE_FN && word(page + GRM_PAGE_FN_VALUE_AT) == (k < 2 ? 1U : 0U));
+        if (k < 2) assert(word(page + GRM_PAGE_FN_SETTING_AT) == handles[k]);
+    }
+    /* A value past the rows is not valid. */
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "GRAIN.GRM", &(struct spec){
+        .id = "GRAIN", .settings = {{"LEVEL", 2, 0}, {"TONE", 3, 0}}, .page_rows = 1, .rows = {0},
+        .fn_value = 2, .fn_setting = 1});
+    assert(install() == 0 && module_status[0] == GRM_BAD_DESCRIPTOR);
+}
+
 /* A setting of a module that does not link is missing, also for a module
    that links before it: a module that requires the setting gets error 55,
    and the layer of an optional one is not registered. */
@@ -774,20 +1143,142 @@ static void a_setting_of_a_module_that_did_not_link_is_missing(void)
     }
 }
 
+static void indicators_resolve_settings_and_preserve_shared_descriptors(void)
+{
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &(struct spec){.id = "FIRST", .order = 1,
+        .settings = {{"ON", 2, GRM_SETTING_PUBLIC}}});
+    add_module(PACKAGE_MODULES_PATH, "ICONS.GRM", &(struct spec){.id = "ICONS", .order = 2,
+        .settings = {{"ON", 2, 0}, {"STRENGTH", 3, 0}}, .uses = {"FIRST.ON"},
+        .indicator_count = 2, .condition_setting = GRM_USED, .condition_value = 1,
+        .icon_setting = 1, .indicator_tiles = 3, .page_rows = 1, .page_icon = 1});
+    assert(install() == 0 && module_status[0] == 0 && module_status[1] == 0);
+    assert(module_indicator_count == 2 && module_status_icons == 2 && !module_native_slots);
+    u32 indicator = module_indicators[0], conditions = word(indicator + GRM_INDICATOR_CONDITIONS_AT);
+    u32 icon = word(indicator + GRM_INDICATOR_ICON_AT);
+    assert(word(conditions) == 0); /* FIRST.ON, not ICONS.ON. */
+    assert(word(icon + GRM_ICON_SETTING_AT) == 2); /* The strength after FIRST.ON and ICONS.ON. */
+    assert(word(module_indicators[2] + GRM_INDICATOR_ICON_AT) == icon);
+    assert(word(module_pages[0] + GRM_PAGE_ICON_AT) == icon);
+    assert((needed_points & POINT_VIEWFINDER_OVERLAY) != 0);
+
+    /* Missing optional settings hide the icon, not the whole module. */
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "OPTIONAL.GRM", &(struct spec){.id = "OPTIONAL",
+        .uses = {"?MISSING.ON"}, .indicator_count = 1, .condition_setting = GRM_USED,
+        .icon_setting = GRM_USED, .indicator_tiles = 1});
+    assert(install() == 0 && module_status[0] == 0 && module_indicator_count == 1);
+    indicator = module_indicators[0];
+    assert(word(word(indicator + GRM_INDICATOR_CONDITIONS_AT)) == GRM_NO_SETTING);
+    assert(word(word(indicator + GRM_INDICATOR_ICON_AT) + GRM_ICON_KIND_AT) == 0);
+}
+static void indicators_reject_conflicts_overflow_and_used_value_ranges(void)
+{
+    reset();
+    const struct spec native = {.id = "FIRST", .order = 1, .settings = {{"ON", 2, 0}},
+        .indicator_count = 1, .indicator_slot = GRM_SLOT_IMAGE_CONTROL, .indicator_tiles = 2};
+    add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &native);
+    struct spec duplicate = native; duplicate.id = "SECOND"; duplicate.order = 2;
+    add_module(PACKAGE_MODULES_PATH, "SECOND.GRM", &duplicate);
+    assert(install() == 0 && module_indicator_count == 1);
+    assert(module_status[0] == 0 && module_status[1] == GRM_BAD_DESCRIPTOR);
+    assert(module_native_slots == 1U << GRM_SLOT_IMAGE_CONTROL);
+
+    reset();
+    struct spec row = {.id = "FIRST", .order = 1, .settings = {{"ON", 2, 0}},
+        .indicator_count = 4, .indicator_tiles = 2};
+    add_module(PACKAGE_MODULES_PATH, "FIRST.GRM", &row);
+    row.id = "SECOND"; row.order = 2; row.indicator_count = 3;
+    add_module(PACKAGE_MODULES_PATH, "SECOND.GRM", &row);
+    assert(install() == 0 && module_indicator_count == 4 && module_status[1] == GRM_NO_ROOM);
+
+    for (u32 bad = 0; bad < 3; ++bad) {
+        reset();
+        add_module(PACKAGE_MODULES_PATH, "INVALID.GRM", &(struct spec){.id = "INVALID",
+            .uses = {"CORE.GRAIN"}, .indicator_count = 1, .condition_setting = GRM_USED,
+            .condition_value = bad == 0 ? 5 : 0, .icon_setting = GRM_USED,
+            .icon_kind = bad == 2 ? GRM_ICON_TONE : GRM_ICON_TILE,
+            .indicator_tiles = bad == 1 ? 4 : 5});
+        assert(install() == 0 && !module_indicator_count && module_status[0] == GRM_BAD_DESCRIPTOR);
+    }
+    /* A label of CORE.ASPECT needs a core label for each of its 8 values:
+       labels 0 to 7 exist, and the last 7 labels and one more do not. */
+    for (u32 first = 0; first <= GRM_LABELS - 7; first += GRM_LABELS - 7) {
+        reset();
+        add_module(PACKAGE_MODULES_PATH, "LABEL.GRM", &(struct spec){.id = "LABEL",
+            .uses = {"CORE.ASPECT"}, .indicator_count = 1, .condition_setting = GRM_USED,
+            .icon_kind = GRM_ICON_LABEL, .icon_setting = GRM_USED, .icon_first = first});
+        assert(install() == 0 && module_status[0] == (first ? GRM_BAD_DESCRIPTOR : 0));
+        assert(module_indicator_count == (first ? 0U : 1U));
+    }
+}
+static void legacy_tone_icon_is_only_for_old_module_abi(void)
+{
+    for (u32 legacy = 0; legacy < 2; ++legacy) {
+        reset();
+        add_module(PACKAGE_MODULES_PATH, "TONE.GRM", &(struct spec){.id = "TONE",
+            .uses = {"CORE.TONE"}, .legacy_abi = (int)legacy});
+        assert(install() == 0 && module_status[0] == 0);
+        assert(module_legacy_tone_owner == (legacy ? CODE_AT : 0));
+    }
+    reset();
+    add_module(PACKAGE_MODULES_PATH, "TONE.GRM", &(struct spec){.id = "TONE",
+        .uses = {"CORE.TONE"}, .indicator_count = 1, .indicator_slot = GRM_SLOT_IMAGE_CONTROL,
+        .condition_setting = GRM_USED, .icon_kind = GRM_ICON_TONE, .icon_setting = GRM_USED});
+    assert(install() == 0 && module_status[0] == 0 && module_indicator_count == 1);
+    assert(word(word(module_indicators[0] + GRM_INDICATOR_ICON_AT) + GRM_ICON_SETTING_AT) == GRKIT_CORE_TONE);
+}
+
+/* IMPORTED.TXT: a line with the size and the stamp of an inbox file gives its
+   hash while both stay the same, so the RTOS side does not read the file. A
+   line without them, or another size or stamp, needs the file. */
+static void imported_lines_give_the_hash_of_an_unchanged_file(void)
+{
+    const char *text = "1315C678.GRF FDEB34F1 00002200 1234ABCD\r\n13A530FC.GRF 19B4C184\r\n";
+    long n = (long)strlen(text);
+    memcpy(recorded, text, (size_t)n);
+    u32 hash = 0;
+    assert(recorded_hash(n, "1315c678.grf", 0x2200, 0x1234abcd, &hash) && hash == 0xfdeb34f1);
+    assert(!recorded_hash(n, "1315C678.GRF", 0x2200, 0x1234abce, &hash));
+    assert(!recorded_hash(n, "1315C678.GRF", 0x2000, 0x1234abcd, &hash));
+    assert(!recorded_hash(n, "13A530FC.GRF", 0, 0, &hash));
+    assert(!recorded_hash(n, "1315C678.GR", 0x2200, 0x1234abcd, &hash));
+    assert(!recorded_hash(-1, "1315C678.GRF", 0x2200, 0x1234abcd, &hash));
+    /* The lines that record_line writes read back the same. */
+    u32 m = record_line(0, "1315C678.GRF", 0xfdeb34f1, 1, 0x2200, 0x1234abcd);
+    m = record_line(m, "13A530FC.GRF", 0x19b4c184, 0, 0, 0);
+    assert(m == (u32)n && !memcmp(record, text, (size_t)n));
+}
+
 static void *run(void *unused)
 {
     (void)unused;
+    imported_lines_give_the_hash_of_an_unchanged_file();
+    indicators_resolve_settings_and_preserve_shared_descriptors();
+    indicators_reject_conflicts_overflow_and_used_value_ranges();
+    legacy_tone_icon_is_only_for_old_module_abi();
     modules_come_from_both_folders_in_header_order();
     more_modules_than_the_list_holds_are_counted();
     a_full_list_keeps_the_package_modules();
     safe_mode_loads_no_module();
     a_bad_module_keeps_the_others();
+    module_code_follows_the_actual_core();
+    code_overflow_leaves_camera_memory_unchanged();
     the_budget_counts_the_services_block();
     install_writes_the_settings_and_the_contexts();
+    setting_defaults_and_saved_zero();
+    framing_mode_state_survives_install_planning();
+    install_settings_page();
+    install_color_only_rows();
+    a_color_only_module_needs_a_color_camera();
+    install_group_page();
+    the_switch_stops_each_module();
+    layer_conditions_resolve_shared_and_optional_settings();
     layers_follow_their_order_and_filters_their_stage();
     the_module_list_shows_each_result();
     the_layers_and_filters_fill_their_slots();
     settings_rows_of_used_settings();
+    the_fn_setting_of_a_page_gets_its_handle();
     a_setting_of_a_module_that_did_not_link_is_missing();
     reset();
     return 0;

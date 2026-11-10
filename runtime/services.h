@@ -85,8 +85,9 @@
 #define MENU_VALUE_TEXT_AT 8U
 #define MENU_VALUE_TEXT 16U
 #define MENU_VALUE_SIZE (MENU_VALUE_TEXT + 2U * MENU_VALUE_UNITS)
-/* A row for each listed module, ADJ Order, and About GRKit. */
-#define MENU_ROWS_SLOTS 12U
+/* A row for the GRKit switch, each listed module, ADJ Order, and About
+   GRKit. */
+#define MENU_ROWS_SLOTS 13U
 #define MENU_ROW_MODULE 0U
 #define MENU_ROW_LABEL 4U
 #define MENU_ROW_VALUE 8U
@@ -108,19 +109,35 @@
 #define MENU_ROWS_FIRST (MENU_ROWS_PAGE_TITLE + 2U * MENU_PAGE_TITLE_UNITS)
 #define MENU_ROWS_TAB (MENU_ROWS_FIRST + MENU_ROWS_SLOTS * MENU_ROW_SIZE)
 #define MENU_ROWS_TAB_SIZE 0x384U
+/* The MENU controller that the pages of the GRKit rows return to
+   (runtime/menu_settings.h: menu_return), or 0 before the first change from
+   one. */
+#define MENU_ROWS_RETURN (MENU_ROWS_TAB + MENU_ROWS_TAB_SIZE)
 /* The code of the modules that a soft Off stopped at this start
    (runtime/manage.h): their count, then the start and the end of the code of
    each. The core calls no module code in these ranges. */
-#define SERVICES_SUSPENDED (SERVICES_MENU + MENU_ROWS_TAB + MENU_ROWS_TAB_SIZE)
+#define SERVICES_SUSPENDED (SERVICES_MENU + MENU_ROWS_RETURN + 4U)
 #define SERVICES_SUSPENDED_MAX GRKIT_MODULES_MAX
-/* The checkbox page of options pages (runtime/menu_settings.h): the second
-   SelectMenuController, or 0 before the first options page; the controller ID
-   of the open options page, or 0; and 1 while the controller is built. */
+/* The own SelectMenuControllers of the long value pages
+   (runtime/menu_settings.h): the checkbox page of options pages, or 0 before
+   the first one; the controller ID of the open long value page, or 0; while a
+   controller is built, 1 + its page (CHECK_PAGE_CHECKBOX or CHECK_PAGE_RADIO),
+   else 0; the radio page of the other long value pages, or 0; the setting
+   that the open long value page shows; the row view type of a radio row and
+   the row height of the native constructor; then for each page its list and
+   its row count. */
 #define SERVICES_CHECK (SERVICES_SUSPENDED + 4U + 8U * SERVICES_SUSPENDED_MAX)
 #define CHECK_PAGE 0U
 #define CHECK_ID 4U
 #define CHECK_BUILD 8U
-#define SERVICES_SIZE (SERVICES_CHECK + 12U)
+#define CHECK_RADIO 12U
+#define CHECK_SETTING 16U
+#define CHECK_RADIO_TYPE 20U
+#define CHECK_HEIGHT 24U
+#define CHECK_LISTS 28U
+#define CHECK_PAGE_CHECKBOX 0U
+#define CHECK_PAGE_RADIO 1U
+#define SERVICES_SIZE (SERVICES_CHECK + CHECK_LISTS + 2U * 8U)
 #define SERVICES_WORDS (SERVICES_SIZE / 4U)
 /* The events (GRKIT_EVENT_*). */
 #define SERVICE_EVENT_SYSTEM_READY 1U

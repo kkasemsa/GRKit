@@ -25,14 +25,22 @@ pub enum Part {
 }
 
 /// A hook that each build of a family installs: the symbol of its code, the
-/// component that holds that code, the extension point that needs it, and
+/// component that holds that code, the extension points that need it, and
 /// whether its site gets a BL instead of a B.
 #[derive(Debug, PartialEq, Eq)]
 pub struct HookSpec {
     pub symbol: &'static str,
     pub part: Part,
     pub point: Point,
+    pub also: Option<Point>,
     pub link: bool,
+}
+
+impl HookSpec {
+    /// Install the hook when either extension point is active.
+    pub fn point_mask(&self) -> u32 {
+        self.point.bit() | self.also.map_or(0, Point::bit)
+    }
 }
 
 /// A hook whose site gets a B to its code.
@@ -41,6 +49,7 @@ pub const fn b(symbol: &'static str, part: Part, point: Point) -> HookSpec {
         symbol,
         part,
         point,
+        also: None,
         link: false,
     }
 }
@@ -50,6 +59,22 @@ pub const fn bl(symbol: &'static str, part: Part, point: Point) -> HookSpec {
     HookSpec {
         link: true,
         ..b(symbol, part, point)
+    }
+}
+
+/// A B hook shared by two extension points.
+pub const fn b_shared(symbol: &'static str, part: Part, point: Point, also: Point) -> HookSpec {
+    HookSpec {
+        also: Some(also),
+        ..b(symbol, part, point)
+    }
+}
+
+/// A BL hook shared by two extension points.
+pub const fn bl_shared(symbol: &'static str, part: Part, point: Point, also: Point) -> HookSpec {
+    HookSpec {
+        also: Some(also),
+        ..bl(symbol, part, point)
     }
 }
 
@@ -106,13 +131,22 @@ pub fn hooks(target: &Target) -> Result<Vec<Hook>> {
     Ok(hooks)
 }
 
-/// The offsets of the code regions in the tail. The first 256 bytes stay
-/// unused. The menu starts at a fixed offset; Framing starts after the menu
-/// code, at the next REGION_ALIGN boundary, and extends to the end of the
-/// tail. So the menu and Framing share the space after MENU_START.
+/// The first 256 bytes of the tail stay unused. Components follow their
+/// predecessors at 256-byte boundaries and share the executable mapping.
 const PROCESSING_START: u32 = 0x100;
-const MENU_START: u32 = 0x500;
-const REGION_ALIGN: u32 = 0x100;
+pub(crate) const REGION_ALIGN: u32 = 0x100;
+
+pub(crate) fn aligned_code_end(end: u32) -> Result<u32> {
+    let aligned = end
+        .checked_add(REGION_ALIGN - 1)
+        .context("Private code alignment overflows")?
+        & !(REGION_ALIGN - 1);
+    ensure!(
+        aligned <= RTOS_EXECUTABLE_END,
+        "Private code exceeds the executable mapping"
+    );
+    Ok(aligned)
+}
 
 /// Where a target's components live and where they hook the firmware.
 #[derive(Debug, PartialEq, Eq)]
@@ -120,13 +154,13 @@ pub struct Layout {
     /// The preprocessor definition that selects `runtime/targets/<target>.h`
     /// in `runtime/firmware.h`.
     pub define: &'static str,
-    /// The private tail after the decoded RTOS image, which holds each code
-    /// region. The RTOS maps it read-only and executable, and no firmware code
-    /// refers to it. BOOT does not reload it, and nothing clears it: after
+    /// The base of the private tail after the decoded RTOS image. Components
+    /// share its read-only executable mapping through RTOS_EXECUTABLE_END.
+    /// No firmware code refers to it. BOOT does not reload it, and nothing clears it: after
     /// power-on, a GR III held the noise of uninitialized DRAM there. The
     /// installer overwrites it without a stock-byte check. The guards detect a
     /// firmware that extends the image into it.
-    pub tail: (u32, u32),
+    pub tail: u32,
     /// Stock instructions around the processing hooks that their code relies
     /// on, which the build checks.
     pub contexts: &'static [(u32, &'static str)],
@@ -143,22 +177,32 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The region of Image Control processing.
-    pub fn processing(&self) -> (u32, u32) {
-        (self.tail.0 + PROCESSING_START, self.tail.0 + MENU_START)
+    /// The first component starts after the reserved header space.
+    pub fn processing(&self) -> Result<(u32, u32)> {
+        self.region(self.tail)
     }
 
-    /// The region that the private menu can use: to the end of the tail.
-    /// Framing then takes the space after the menu code.
-    pub fn menu(&self) -> (u32, u32) {
-        (self.tail.0 + MENU_START, self.tail.1)
+    /// The menu follows the actual Processing payload, if present.
+    pub fn menu(&self, processing_end: u32) -> Result<(u32, u32)> {
+        self.region(processing_end)
     }
 
-    /// The region of Framing, Guides, and picture code after a menu whose
-    /// code ends at `menu_end`.
-    pub fn framing(&self, menu_end: u32) -> (u32, u32) {
-        let start = menu_end.max(self.tail.0 + MENU_START);
-        (start.next_multiple_of(REGION_ALIGN), self.tail.1)
+    /// Framing follows the actual menu payload.
+    pub fn framing(&self, menu_end: u32) -> Result<(u32, u32)> {
+        self.region(menu_end)
+    }
+
+    fn region(&self, previous_end: u32) -> Result<(u32, u32)> {
+        let first = self
+            .tail
+            .checked_add(PROCESSING_START)
+            .context("Private tail start overflows")?;
+        let start = aligned_code_end(previous_end.max(first))?;
+        ensure!(
+            start < RTOS_EXECUTABLE_END,
+            "No executable memory remains for a component"
+        );
+        Ok((start, RTOS_EXECUTABLE_END))
     }
 }
 
@@ -200,7 +244,7 @@ pub struct Component {
     pub references: Vec<Reference>,
     pub symbols: BTreeMap<String, u32>,
     pub code_size: usize,
-    /// The size of the reserved code region.
+    /// Bytes from this component base to the shared executable mapping limit.
     pub limit: usize,
 }
 
@@ -213,7 +257,7 @@ fn code_component(
 ) -> Result<Component> {
     ensure!(
         u64::from(base) + code.len() as u64 <= u64::from(end),
-        "Private component exceeds its reserved region ({} bytes, limit {})",
+        "Private component exceeds the executable mapping ({} bytes, available {})",
         code.len(),
         end - base
     );
@@ -267,7 +311,7 @@ pub fn processing(
         .family
         .processing_source
         .with_context(|| format!("The {} family has no processing", body.target.family.name))?;
-    let (base, end) = layout.processing();
+    let (base, end) = layout.processing()?;
     for &(address, expected) in layout.contexts {
         ensure!(
             body.read(address, expected.len() / 2)? == hex::decode(expected)?,
@@ -316,9 +360,10 @@ pub fn menu(
     runtime: &Path,
     body: &FirmwareImage,
     tools: &Toolchain,
+    processing_end: u32,
 ) -> Result<Component> {
     let layout = body.target.layout;
-    let (base, end) = layout.menu();
+    let (base, end) = layout.menu(processing_end)?;
     let source = directory.join("module-menu.S");
     let object = directory.join("module-menu.o");
     let assembly_object = directory.join("module-menu-asm.o");
@@ -388,7 +433,7 @@ pub fn framing(
     menu_end: u32,
 ) -> Result<Component> {
     let layout = body.target.layout;
-    let (base, end) = layout.framing(menu_end);
+    let (base, end) = layout.framing(menu_end)?;
     let object = directory.join("framing.o");
     let assembly_object = directory.join("framing-asm.o");
     let picture = directory.join("picture.o");
@@ -584,7 +629,7 @@ fn push_hook(component: &mut Component, base: u32, hook: &Hook, before: Vec<u8>)
     });
     component.patches.push(Patch {
         address,
-        points: hook.spec.point.bit(),
+        points: hook.spec.point_mask(),
         before,
         after: instruction.to_le_bytes().to_vec(),
         site: Some(Anchor::Firmware(address)),
