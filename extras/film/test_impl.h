@@ -3,7 +3,7 @@
    viewfinder label, with the GR IV recipes of the page. The test.c of a page
    includes grkit_module.h, ../recipe_type.h, and its recipes.h (the same
    table as film.c), defines OTHER_PICK and OTHER_PICK2, the used PICKs of
-   the other pages, and includes this. */
+   the other pages, when there are other pages, and includes this. */
 #include <assert.h>
 #include <string.h>
 
@@ -32,34 +32,43 @@ int main(void)
     Surface s = grkit_test_surface(full);
     u32 i, calls;
 
-    /* The descriptor: PICK alone; six used settings, the last two the PICKs
-       of the other pages; a page, an event subscriber, and a layer; Off and
-       a tile for each recipe. */
-    assert(RECIPE_COUNT >= 1 && RECIPE_COUNT <= 8);
+    /* The descriptor: PICK alone; four used settings, and the PICKs of the
+       other pages after them; a page, an event subscriber, and a layer; Off
+       and a tile for each recipe. */
+    assert(RECIPE_COUNT >= 2 && RECIPE_COUNT <= 63);
+#ifdef OTHER_PICK
     assert(grkit_module.setting_count == 1 && grkit_module.use_count == 6);
+#else
+    assert(grkit_module.setting_count == 1 && grkit_module.use_count == 4);
+#endif
     assert(grkit_module.registration_count == 3);
     assert(grkit_module.settings[0].values == RECIPE_COUNT + 1);
     assert(grkit_module.tile_count == RECIPE_COUNT + 1);
 
-    /* The installed effects, in the reverse order of the recipes, after two
+    /* The installed effects, in the reverse order of the recipes, after one
        of no page: a recipe finds its effect by ID, not by its place. The
        last recipe is not installed. */
     grkit_test_effects[0] = "elsewhere-v1";
-    grkit_test_effects[1] = "nowhere-v1";
-    for (i = 0; i + 1 < RECIPE_COUNT; ++i) grkit_test_effects[2 + i] = recipes[RECIPE_COUNT - 2 - i].effect;
+    for (i = 0; i + 1 < RECIPE_COUNT; ++i) grkit_test_effects[1 + i] = recipes[RECIPE_COUNT - 2 - i].effect;
 
     /* Choosing a recipe sets its Film Look, grain, and grain size, and sets
        the other pages to Off. */
     memset(grkit_test_settings, 0, sizeof(grkit_test_settings));
     for (i = 0; i + 1 < RECIPE_COUNT; ++i) {
-        u32 tone = 2 + (RECIPE_COUNT - 2 - i) + 1;
-        grkit_test_settings[OTHER_PICK] = 2;
+        u32 tone = 1 + (RECIPE_COUNT - 2 - i) + 1;
+#ifdef OTHER_PICK
+    #ifdef OTHER_PICK
+    grkit_test_settings[OTHER_PICK] = 2;
+#endif
         grkit_test_settings[OTHER_PICK2] = 3;
+#endif
         choose(i + 1);
         assert(grkit_test_settings[USED_CORE_TONE] == tone);
         assert(grkit_test_settings[USED_CORE_GRAIN] == recipes[i].grain);
         assert(grkit_test_settings[USED_CORE_GRAIN_SIZE] == recipes[i].size);
+#ifdef OTHER_PICK
         assert(grkit_test_settings[OTHER_PICK] == 0 && grkit_test_settings[OTHER_PICK2] == 0);
+#endif
         assert(film_state(i) == 0);
     }
     /* No recipe of this page sets an aspect, so the aspect stays. */
@@ -69,7 +78,9 @@ int main(void)
        and leaves the other pages as they are. */
     choose(1);
     calls = grkit_test_ui_calls;
+#ifdef OTHER_PICK
     grkit_test_settings[OTHER_PICK] = 2;
+#endif
     {
         u32 tone = grkit_test_settings[USED_CORE_TONE], grain = grkit_test_settings[USED_CORE_GRAIN];
         choose(RECIPE_COUNT);
@@ -77,8 +88,10 @@ int main(void)
     }
     assert(grkit_test_ui_calls == calls + 1);
     assert(film_state(RECIPE_COUNT - 1) == 2);
+#ifdef OTHER_PICK
     assert(grkit_test_settings[OTHER_PICK] == 2);
     grkit_test_settings[OTHER_PICK] = 0;
+#endif
 
     /* Off applies nothing. */
     choose(1);
@@ -99,7 +112,9 @@ int main(void)
     grkit_test_settings[USED_CORE_GRAIN] = 4;
     film_event(GRKIT_EVENT_SYSTEM_READY, 0, 0);
     film_event(GRKIT_EVENT_SETTING_CHANGED, USED_CORE_GRAIN, 1);
+#ifdef OTHER_PICK
     film_event(GRKIT_EVENT_SETTING_CHANGED, OTHER_PICK, 1);
+#endif
     assert(grkit_test_settings[USED_CORE_GRAIN] == 4 && grkit_test_settings[USED_CORE_TONE] == 19);
 
     /* The label: the name of the chosen recipe, white, in the third row. */

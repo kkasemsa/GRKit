@@ -1,17 +1,15 @@
-/* The code of the Film pages: Negative (extras/film/neg), Slide
-   (extras/film/slide), and Cine / B&W (extras/film/cine), one ADJ page of
-   film recipes each, grouped by type. A recipe is a Film Look, named by its
-   stable effect ID, with a grain strength, a grain size, and an optional
-   aspect. Choosing a recipe applies it at once and sets the other pages to
-   Off. The viewfinder shows the name of the active recipe, with a mark when a
-   setting differs from it. The recipes are data of the camera family
-   (recipes/<family>.toml, generated into recipes-<family>.h of each page).
+/* The code of a Film page (extras/film/all): one ADJ page of film recipes,
+   in groups by type. A recipe is a Film Look, named by its stable effect ID,
+   with a grain strength, a grain size, and an optional aspect. Choosing a
+   recipe applies it at once. The viewfinder shows the name of the active
+   recipe, with a mark when a setting differs from it. The recipes are data
+   of the camera family (recipes/<family>.toml, generated into
+   recipes-<family>.h of the page).
 
    The film.c of a page includes this after grkit.h, grkit_module.h,
    recipe_type.h, and its recipes.h, and defines USED_OTHER_PICK and
-   USED_OTHER_PICK2, the PICKs of the other two pages. A page has at most 8
-   recipes: its tiles are in the 64 KB code segment of the module
-   (GRM_MAX_SEGMENT), 6400 bytes each. */
+   USED_OTHER_PICK2: the PICKs of other Film pages, which a recipe sets to
+   Off, or GRKIT_NO_SETTING. */
 
 /* ---- applying a recipe ---------------------------------------------------- */
 

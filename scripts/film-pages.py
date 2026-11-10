@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Writes the manifest, source, text, and tiles of the three Film pages
-(extras/film/neg, slide, cine) from the packs of recipes/gr4.toml (the
+"""Writes the manifest, source, text, and tiles of the Film page
+(extras/film/all) from the packs of recipes/gr4.toml (the
 same packs in every family) and the groups of PAGES below. The recipe headers
 come from the recipes test (GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core
 --test recipes), which reads the same PAGES table from this file's twin in
@@ -20,16 +20,22 @@ import canister_icons  # noqa: E402
 FILM = ROOT / "extras/film"
 LANGUAGES = ["en", "zh-Hans", "zh-Hant", "ja", "ko"]
 # folder: module ID, order, groups, module tile letter, title per language.
+# One page: the core has 10 page slots (GRKIT_MODULE_PAGES_MAX), and Glow of
+# GRKit takes 3 of them.
 PAGES = {
-    "neg": ("NEGATIVE", 5, ["negative"], "N",
-            ["Negative", "负片", "負片", "ネガ", "네거티브"]),
-    "slide": ("SLIDE", 6, ["slide", "instant"], "S",
-              ["Slide", "反转片", "正片", "ポジ", "슬라이드"]),
-    "cine": ("CINEBW", 7, ["cine", "bw"], "C",
-             ["Cine / B&W", "电影 / 黑白", "電影 / 黑白", "シネ / 白黒", "시네 / 흑백"]),
+    "all": ("FILM", 5, ["negative", "slide", "cine", "bw", "instant"], "F",
+            ["Film", "胶片", "底片", "フィルム", "필름"]),
+}
+# The row prefix of each group, per language.
+PREFIX = {
+    "negative": ["Neg", "负片", "負片", "ネガ", "네거"],
+    "slide": ["Slide", "反转片", "正片", "ポジ", "슬라이드"],
+    "cine": ["Cine", "电影", "電影", "シネ", "시네"],
+    "bw": ["B&W", "黑白", "黑白", "白黒", "흑백"],
+    "instant": ["Instant", "拍立得", "拍立得", "インスタント", "인스턴트"],
 }
 OFF = ["Off", "关", "關", "オフ", "끄기"]
-TILE_MAX = 8
+TILE_MAX = 63
 
 
 def main():
@@ -45,6 +51,7 @@ def main():
         tiles = ["tiles/0-module.png"] + [f"tiles/{i + 1}-{p['id']}.png" for i, p in enumerate(recipes)]
         uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT"] + [f"?{o}.PICK" for o in others]
         groups_text = " and ".join(groups)
+        other = [f"USED_{o}_PICK" for o in others] + ["GRKIT_NO_SETTING"] * 2
         manifest = f"""# {titles[0]}: the Film page of the {groups_text} recipes, each a Film Look with
 # its grain and an optional aspect, with the code of extras/film/film_impl.h.
 # Choosing a recipe on any Film page sets the other pages to Off. The recipes
@@ -98,13 +105,13 @@ live_only = true
 #include "grkit_module.h"
 #include "../recipe_type.h"
 #include "recipes.h"
-#define USED_OTHER_PICK USED_{others[0]}_PICK
-#define USED_OTHER_PICK2 USED_{others[1]}_PICK
+#define USED_OTHER_PICK {other[0]}
+#define USED_OTHER_PICK2 {other[1]}
 #include "../film_impl.h"
 """
         (directory / "film.c").write_text(source)
         for l, language in enumerate(LANGUAGES):
-            rows = [OFF[l]] + [p["name"] for p in recipes]
+            rows = [OFF[l]] + [f"{PREFIX[p['group']][l]} - {p['name']}" for p in recipes]
             text = (f"title = {json.dumps(titles[l], ensure_ascii=False)}\n"
                     f"rows = [{', '.join(json.dumps(r, ensure_ascii=False) for r in rows)}]\n")
             (directory / "text" / f"{language}.toml").write_text(text)

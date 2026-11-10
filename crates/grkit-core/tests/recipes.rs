@@ -15,14 +15,21 @@ const SHARED: [&str; 6] = ["id", "name", "group", "effect", "white_balance", "as
 /// The recipe groups, in file order.
 const GROUPS: [&str; 5] = ["negative", "slide", "cine", "bw", "instant"];
 /// The Film pages: the folder under extras/film and the groups of each, as
-/// scripts/film-pages.py has them. A page has at most 8 recipes: its tiles,
-/// 6400 bytes each, share the 64 KB code segment of the module.
-const PAGES: [(&str, &[&str]); 3] = [
-    ("neg", &["negative"]),
-    ("slide", &["slide", "instant"]),
-    ("cine", &["cine", "bw"]),
+/// scripts/film-pages.py has them. A page lists its recipes after Off, so it
+/// has at most GRM_PAGE_ROWS - 1 of them (runtime/module_link.h).
+const PAGES: [(&str, &[&str]); 1] = [("all", &["negative", "slide", "cine", "bw", "instant"])];
+const PAGE_RECIPES: usize = 63;
+/// The row prefix of each group in the menu languages.
+const PREFIX: [(&str, [&str; 5]); 5] = [
+    ("negative", ["Neg", "负片", "負片", "ネガ", "네거"]),
+    ("slide", ["Slide", "反转片", "正片", "ポジ", "슬라이드"]),
+    ("cine", ["Cine", "电影", "電影", "シネ", "시네"]),
+    ("bw", ["B&W", "黑白", "黑白", "白黒", "흑백"]),
+    (
+        "instant",
+        ["Instant", "拍立得", "拍立得", "インスタント", "인스턴트"],
+    ),
 ];
-const PAGE_RECIPES: usize = 8;
 const LANGUAGES: [&str; 5] = ["en", "zh-Hans", "zh-Hant", "ja", "ko"];
 
 fn root() -> PathBuf {
@@ -293,7 +300,7 @@ fn check_page(page: &str, groups: &[&str]) {
         recipes.len() + 1,
         "{page}: tiles"
     );
-    for language in LANGUAGES {
+    for (l, language) in LANGUAGES.iter().enumerate() {
         let file: toml::Table =
             std::fs::read_to_string(directory.join(format!("text/{language}.toml")))
                 .unwrap()
@@ -306,9 +313,13 @@ fn check_page(page: &str, groups: &[&str]) {
             .map(|r| r.as_str().unwrap())
             .collect();
         assert_eq!(rows.len(), recipes.len() + 1, "{page} {language}: rows");
-        let expected: Vec<&str> = recipes
+        let expected: Vec<String> = recipes
             .iter()
-            .map(|pack| text(pack, "name").unwrap())
+            .map(|pack| {
+                let group = text(pack, "group").unwrap();
+                let prefix = PREFIX.iter().find(|(g, _)| *g == group).unwrap().1[l];
+                format!("{prefix} - {}", text(pack, "name").unwrap())
+            })
             .collect();
         assert_eq!(&rows[1..], expected, "{page} {language}: recipe rows");
     }

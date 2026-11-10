@@ -1,7 +1,7 @@
-# Slide: the Film page of the slide and instant recipes, each a Film Look with
+# Film: the Film page of the negative and slide and cine and bw and instant recipes, each a Film Look with
 # its grain and an optional aspect, with the code of extras/film/film_impl.h.
 # Choosing a recipe on any Film page sets the other pages to Off. The recipes
-# are data of the camera family: the packs of group slide and instant in
+# are data of the camera family: the packs of group negative and slide and cine and bw and instant in
 # recipes/<family>.toml, generated into recipes-<family>.h. recipes.h selects
 # the family; scripts/recipe-module.sh builds the module of a family.
 # scripts/film-pages.py writes this file, film.c, text/, and tiles/.
@@ -9,27 +9,41 @@
 # The page has no native settings rows (a row holds at most 8 values), so
 # Fn opens no settings page; the GRKit section of MENU shows Enable and the
 # page row.
-id = "SLIDE"
+id = "FILM"
 version = 1
 # The default place in ADJ and in MENU: before Film Look (10).
-order = 6
+order = 5
 sources = ["film.c"]
 # Tile n shows recipe n. Tile 0 is the module tile, for Off at the root.
 tiles = [
     "tiles/0-module.png",
-    "tiles/1-kodachrome-64.png",
-    "tiles/2-ektachrome-e100.png",
-    "tiles/3-provia-100f.png",
-    "tiles/4-velvia-100.png",
-    "tiles/5-astia-100f.png",
-    "tiles/6-instax.png",
+    "tiles/1-portra-400.png",
+    "tiles/2-portra-800.png",
+    "tiles/3-ektar-100.png",
+    "tiles/4-gold-200.png",
+    "tiles/5-ultramax-400.png",
+    "tiles/6-c200.png",
+    "tiles/7-superia-400.png",
+    "tiles/8-pro-400h.png",
+    "tiles/9-kodachrome-64.png",
+    "tiles/10-ektachrome-e100.png",
+    "tiles/11-provia-100f.png",
+    "tiles/12-velvia-100.png",
+    "tiles/13-astia-100f.png",
+    "tiles/14-vision3-500t.png",
+    "tiles/15-vision3-250d.png",
+    "tiles/16-eterna-500t.png",
+    "tiles/17-trix-400.png",
+    "tiles/18-double-x-5222.png",
+    "tiles/19-hp5-400.png",
+    "tiles/20-instax.png",
 ]
-uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT", "?NEGATIVE.PICK", "?CINEBW.PICK"]
+uses = ["CORE.TONE", "CORE.GRAIN", "CORE.GRAIN_SIZE", "?CORE.ASPECT"]
 
 # 0 Off, then recipe n - 1 of recipes.h.
 [[settings]]
 key = "PICK"
-values = 7
+values = 21
 saved = true
 public = true
 
