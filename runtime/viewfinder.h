@@ -209,10 +209,17 @@ static GRKIT_ICON_COMPACT void viewfinder_leave(volatile u32 *h,u32 controller) 
     h[GRKIT_HOST_FRAME_CANVAS/4]=0;
     h[GRKIT_HOST_FRAME_BITMAP/4]=0;
 }
+/* The native views of a canvas, the same on each target: the vector of
+   child views (begin, end), the rectangle in screen pixels (x, y, width,
+   height), and the visible flag. A hidden view hides its children, which
+   keep their own flags and rectangles. */
+#define VIEW_CHILDREN 0xc
+#define VIEW_SCREEN 0x44
+#define VIEW_VISIBLE 0x9e
 /* Pixel data of a full 720x480 32-bit canvas at the origin, or 0. */
 static GRKIT_ICON_COMPACT u32 canvas_bitmap(u32 canvas,u32 bitmap) {
     u32 stride,data;
-    if(!BYTE(canvas,0x9e) || WORD(canvas,0x20) || WORD(canvas,0x24) ||
+    if(!BYTE(canvas,VIEW_VISIBLE) || WORD(canvas,0x20) || WORD(canvas,0x24) ||
        WORD(canvas,0x28)!=720 || WORD(canvas,0x2c)!=480 ||
        BYTE(bitmap,2)!=5 || HALF(bitmap,0x1c)!=720 || HALF(bitmap,0x1e)!=480) return 0;
     stride=HALF(bitmap,0x18);
@@ -228,59 +235,141 @@ static GRKIT_ICON_COMPACT u32 canvas_pixels(u32 canvas,u32 bitmap) {
     if(FRAMING_NATIVE_ASPECT()>3) return 0;
     return canvas_bitmap(canvas,bitmap);
 }
-/* Six 40-pixel icons fit left of the centered load cue. Their order comes
-   from module order, then declaration order; inactive entries leave no gap. */
-#define STATUS_LEFT 7U
-#define STATUS_TOP 45U
+/* The status row is on the second row of the native information, at most
+   from STATUS_LEFT to STATUS_RIGHT. Right of STATUS_RIGHT is the native focus
+   distance. Native views of other states show in the same row, such as the
+   white balance shift under its icon or the dial guide of Snap mode. The row
+   takes the rightmost free part of that range that holds it: STATUS_GAP from
+   each visible native view (status_free). The order of the indicators comes
+   from module order, then declaration order; inactive entries leave no gap.
+   When no free part holds all of them, the row takes the widest one, and the
+   indicators that do not fit there are not shown, nor are those after them.
+   The row waits while the load cue shows in the middle of the same row; the
+   end of the cue redraws the canvas. */
+#define STATUS_LEFT 7
+#define STATUS_RIGHT 580
+#define STATUS_GAP 20
+/* The most native views that block the row, and the depth of the view tree
+   that status_views reads. The live view has about 150 views, 3 levels deep,
+   and at most 5 of them in the row. */
+#define STATUS_BLOCKS 16U
+#define STATUS_DEPTH 4U
+#define STATUS_CHILDREN 64U
+/* A one-line label stays at LABEL_TOP, so its capitals share the baseline of
+   the native focus distance next to the row. The marks of an icon and of a
+   two-line label fill rows 2 to 37 of their 40 rows; from STATUS_TOP they
+   center on the one-line text. */
+#define STATUS_TOP 40U
+#define STATUS_LINE_HEIGHT 32U
 #define STATUS_STEP 44U
 /* A core label takes its own width and this gap. The marks of an icon reach
    one pixel from its tile edge, so the space after a label looks close to
    the space between two icons. */
 #define STATUS_LABEL_GAP 10U
-/* The row ends before the native focus distance at the right of the second
-   row, and left of the load cue while it shows. An indicator that does not
-   fit is not shown. */
-#define STATUS_RIGHT 580U
-#define STATUS_CUE_GAP 8U
-static GRKIT_ICON_COMPACT u32 status_right(volatile u32 *h) {
-    u32 cue=360-label_width(LABEL_GRKIT)/2;
-    return cue_shown(h) && cue<STATUS_RIGHT+STATUS_CUE_GAP ? cue-STATUS_CUE_GAP : STATUS_RIGHT;
+/* The columns that the visible native views of `view` cover in the row,
+   from STATUS_GAP before to STATUS_GAP after each, into block[*n]: a pair of
+   left and right columns. Only views without children count: a parent spans
+   its children, and some parents span the full screen. Only views inside
+   the rows of the row count: a view that crosses them, such as the focus
+   frame after a touch at the top or a frame line, moves with the subject,
+   and the row stays where it is. A view as wide as the screen draws no
+   information there either. The native Draw runs after the status row, on
+   the same views, in the same task. */
+static GRKIT_ICON_COMPACT void status_views(u32 view,u32 depth,int (*block)[2],u32 *n) {
+    u32 at=WORD(view,VIEW_CHILDREN),end=WORD(view,VIEW_CHILDREN+4),child;
+    int x,y,w,h;
+    if(!BYTE(view,VIEW_VISIBLE)) return;
+    if(at!=end) {
+        if(depth>=STATUS_DEPTH || end<at || end-at>STATUS_CHILDREN*4 || (at&3)) return;
+        for(;at!=end;at+=4) {
+            child=WORD(at,0);
+            if(child && !(child&3)) status_views(child,depth+1,block,n);
+        }
+        return;
+    }
+    x=(int)WORD(view,VIEW_SCREEN); y=(int)WORD(view,VIEW_SCREEN+4);
+    w=(int)WORD(view,VIEW_SCREEN+8); h=(int)WORD(view,VIEW_SCREEN+12);
+    if(w<=0 || h<=0 || w>=720 || y<(int)STATUS_TOP || y+h>(int)STATUS_TOP+40 || *n>=STATUS_BLOCKS) return;
+    block[*n][0]=x-STATUS_GAP; block[*n][1]=x+w+STATUS_GAP; ++*n;
+}
+/* The free part of the row that ends at `right`: its left column, or `right`
+   when `right` lies in a block. */
+static GRKIT_ICON_COMPACT int status_free(int right,int (*block)[2],u32 n) {
+    int left=STATUS_LEFT;
+    u32 i;
+    for(i=0;i<n;++i) {
+        if(block[i][0]<right && block[i][1]>right) return right;
+        if(block[i][1]<=right && block[i][1]>left) left=block[i][1];
+    }
+    return left<right ? left : right;
 }
 static GRKIT_ICON_COMPACT void viewfinder_status_paint(volatile u32 *h,const Surface *surface) {
-    u32 i,count=0,left=STATUS_LEFT,right=status_right(h);
-    for(i=0;i<viewfinder_indicators(h) && count<GRKIT_STATUS_ICONS_MAX;++i) {
-        u32 address=INDICATOR_ENTRY(h,i)[0],id,icon=0,x,y;
+    const volatile u8 *labels=LABEL_MAP(GRKIT_LABELS(framing_header()));
+    /* For each shown indicator: the address of its icon pixels, or its core
+       label with STATUS_LABEL_BIT (icon addresses are below 0x80000000); and
+       its first and last column from the start of the row. */
+#define STATUS_LABEL_BIT 0x80000000U
+    u32 item[GRKIT_STATUS_ICONS_MAX],first[GRKIT_STATUS_ICONS_MAX],last[GRKIT_STATUS_ICONS_MAX];
+    int block[STATUS_BLOCKS][2],right,room,fit=-1,widest=0,widest_right=STATUS_RIGHT;
+    u32 i,n=0,blocks=0,next=0,left,x,y;
+    if(cue_shown(h)) return;
+    for(i=0;i<viewfinder_indicators(h) && n<GRKIT_STATUS_ICONS_MAX;++i) {
+        u32 address=INDICATOR_ENTRY(h,i)[0],id,icon=0,w=40,gap=STATUS_STEP-40;
         if(!address || INDICATOR_WORD(address,4)!=INDICATOR_STATUS_ROW) continue;
         id=viewfinder_indicator_icon(h,i);
         if(id==GRKIT_ICON_OFF) continue;
-        /* A core label, centered on the 40-pixel row like the icons. */
         if(id-GRKIT_ICON_CORE_LABEL(0)<GRKIT_LABEL_COUNT) {
-            u32 label=id-GRKIT_ICON_CORE_LABEL(0),width=label_width(label);
-            u32 height=label_field(LABEL_MAP(GRKIT_LABELS(framing_header())),label*8+2,2);
-            if(!width || height>40 || left+width>right) break;
-            overlay_label(surface,label,left,STATUS_TOP+(40-height)/2);
-            left+=width+STATUS_LABEL_GAP;
-            ++count;
+            u32 label=id-GRKIT_ICON_CORE_LABEL(0);
+            w=label_width(label);
+            if(!w || label_field(labels,label*8+2,2)>40) break;
+            icon=label|STATUS_LABEL_BIT;
+            gap=STATUS_LABEL_GAP;
+        } else {
+            if(id-GRKIT_ICON_MODULE_TILE(0)<GRKIT_MODULE_TILES_MAX) icon=module_tile_address(h,id);
+            else if(id-0x8000U<h[GRKIT_HOST_COUNT/4])
+                icon=WORD(h[GRKIT_HOST_RECORDS/4]+(id-0x8000U)*GRKIT_RECORD_SIZE,GRKIT_RECORD_ICON);
+            if(!icon) continue;
+        }
+        if(next+w>STATUS_RIGHT-STATUS_LEFT) break;
+        item[n]=icon; first[n]=next; last[n++]=next+w;
+        next+=w+gap;
+    }
+    if(!n) return;
+    status_views(h[GRKIT_HOST_FRAME_CANVAS/4],0,block,&blocks);
+    /* A free part ends at STATUS_RIGHT or at the left of a block. Take the
+       rightmost one that holds the row, else the widest one. */
+    for(i=0;i<=blocks;++i) {
+        right=i<blocks ? block[i][0] : STATUS_RIGHT;
+        if(right>STATUS_RIGHT) continue;
+        room=right-status_free(right,block,blocks);
+        if(room>=(int)last[n-1]) { if(right>fit) fit=right; }
+        else if(room>widest) { widest=room; widest_right=right; }
+    }
+    if(fit<0) {
+        while(n && (int)last[n-1]>widest) --n;
+        if(!n) return;
+        fit=widest_right;
+    }
+    left=(u32)fit-last[n-1];
+    for(i=0;i<n;++i) {
+        u32 icon=item[i],at=left+first[i];
+        if(icon&STATUS_LABEL_BIT) {
+            u32 label=icon&~STATUS_LABEL_BIT;
+            overlay_label(surface,label,at,label_field(labels,label*8+2,2)>STATUS_LINE_HEIGHT ? STATUS_TOP : LABEL_TOP);
             continue;
         }
-        if(id-GRKIT_ICON_MODULE_TILE(0)<GRKIT_MODULE_TILES_MAX) icon=module_tile_address(h,id);
-        else if(id-0x8000U<h[GRKIT_HOST_COUNT/4])
-            icon=WORD(h[GRKIT_HOST_RECORDS/4]+(id-0x8000U)*GRKIT_RECORD_SIZE,GRKIT_RECORD_ICON);
-        if(!icon) continue;
-        if(left+40>right) break;
         /* INSTALL stores the same binary-alpha RGBA pixels after each
            native-compatible descriptor, whose size differs by family. */
         icon+=GRKIT_ICON_STRIDE-GRKIT_GRF_ICON_SIZE;
         for(y=0;y<40;++y) {
-            volatile u32 *row=OVERLAY_PIXELS(surface->data+(STATUS_TOP+y)*surface->stride*4)+left;
+            volatile u32 *row=OVERLAY_PIXELS(surface->data+(STATUS_TOP+y)*surface->stride*4)+at;
             for(x=0;x<40;++x) {
                 u32 pixel=WORD(icon,(y*40+x)*4);
                 if(pixel>>24) row[x]=pixel;
             }
         }
-        left+=STATUS_STEP;
-        ++count;
     }
+#undef STATUS_LABEL_BIT
 }
 /* The ADJ canvas of the preview, or 0 (runtime/modules.h: frame_preview). */
 static GRKIT_ICON_COMPACT u32 preview_canvas(volatile u32 *h) {

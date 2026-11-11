@@ -36,10 +36,10 @@ GRKit takes about 8 to 10 seconds to load after power-on, and longer on GR IV or
 
 | Camera | Tested on a camera | Supported |
 | --- | --- | --- |
-| GR III, GR III HDF | 2.10, 2.20 | — |
-| GR IIIx, GR IIIx HDF | 1.60, 1.70 | — |
-| GR IV, GR IV HDF | 1.11, 1.20 | — |
-| GR IV Monochrome | 1.00 | 1.10 |
+| GR III, GR III HDF | 2.10, 2.20 | 2.21 |
+| GR IIIx, GR IIIx HDF | 1.60, 1.70 | 1.71 |
+| GR IV, GR IV HDF | 1.11, 1.20 | 1.21 |
+| GR IV Monochrome | 1.00 | 1.10, 1.11 |
 
 GR IV Monochrome has no Film Look. Other models and firmware versions aren't supported. If GRKit doesn't load on a supported camera, see the [firmware dump guide](resources/DUMP.md).
 
@@ -78,7 +78,7 @@ For other cameras, fewer modules, or other guide languages, see [Build packages]
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Device reports are welcome whether GRKit worked or not, especially for firmware that hasn't been tested on a camera yet. Send problems, feature ideas, and questions through the [feedback form](https://tally.so/r/Z9jRgB), and you can support the project by [buying me a coffee](https://buymeacoffee.com/yuexunjiang).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Device reports are welcome whether GRKit worked or not, especially for firmware that hasn't been tested on a camera yet. Report problems and ask questions through the [support form](https://tally.so/r/Z9jRgB). Suggest features and vote for the ones you want on the [feedback board](https://grkit.userjot.com). You can also support the project by [buying me a coffee](https://buymeacoffee.com/yuexunjiang).
 
 ## Documentation
 

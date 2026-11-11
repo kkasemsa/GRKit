@@ -19,22 +19,49 @@ pub use grkit_core::runtime::HEADER_REFERENCE;
 pub mod common;
 pub mod gr3;
 pub mod gr3_210;
+pub mod gr3_221;
 pub mod gr4;
 pub mod gr4_111;
 pub mod gr4_120;
 pub mod gr4_120_0528;
+pub mod gr4_121;
 
 pub use gr3_210::{IMAGE_CONTROL as GR3_IMAGE_CONTROL, TARGET as GR3_210};
+pub use gr3_221::TARGET as GR3_221;
 pub use gr4_111::{IMAGE_CONTROL as GR4_IMAGE_CONTROL, TARGET as GR4_111};
 pub use gr4_120::{IMAGE_CONTROL as GR4_120_IMAGE_CONTROL, TARGET as GR4_120};
 pub use gr4_120_0528::TARGET as GR4_120_0528;
+pub use gr4_121::TARGET as GR4_121;
 
 pub const RTOS_BASE: u32 = 0x53000000;
 /// The RTOS word that names the firmware version and its build, such as
 /// `01 14 0a 0b` (little-endian 0x0b0a1401) for GR IV 1.20.
 pub const RTOS_IDENTITY: u32 = 0x53002038;
 
-pub const TARGETS: [&Target; 4] = [&GR3_210, &GR4_111, &GR4_120, &GR4_120_0528];
+/// The firmware version of an `RTOS_IDENTITY` word: the major version in its
+/// low byte, the minor version in the next, such as "1.20" for 0x0b0a1401.
+pub fn identity_version(identity: u32) -> String {
+    format!("{}.{:02}", identity & 0xff, (identity >> 8) & 0xff)
+}
+
+/// The model record (`Target::model_record`): the model number, and the
+/// version that the model shows, with the major version in the top byte and
+/// the minor version in the next. GR IV Monochrome runs the firmware file of a
+/// GR IV release but shows its own version, such as 1.11 on the file of 1.21.
+pub const MODEL_NUMBER: u32 = 0x08;
+pub const MODEL_VERSION: u32 = 0x28;
+/// The model numbers of GR IV HDF and GR IV Monochrome.
+pub const MODEL_HDF: u32 = 78561;
+pub const MODEL_MONOCHROME: u32 = 78640;
+
+pub const TARGETS: [&Target; 6] = [
+    &GR3_210,
+    &GR3_221,
+    &GR4_111,
+    &GR4_120,
+    &GR4_120_0528,
+    &GR4_121,
+];
 
 /// The zip that holds the firmware file of a target.
 #[derive(Debug, PartialEq, Eq)]

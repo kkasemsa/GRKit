@@ -45,7 +45,7 @@
       "upstream": "https://github.com/t3mujin/t3mujinpack/blob/0b421f3e25209ed78253d1724a29cc6255c5e7fe/LICENSE.txt"
     },
     "CHANGELOG.txt": {
-      "sha256": "1fc80fc9d437577ca82fb8b5f70917dd68b87f4e08125b8749a16e5dc7af5cf5",
+      "sha256": "378a34b3568913e89b4a10fd3a9fbe2fd00002711f97968b1b119a7284a5d0ad",
       "license": "upstream-changes"
     },
     "bake_spektrafilm.py": {
